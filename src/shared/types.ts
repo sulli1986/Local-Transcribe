@@ -71,10 +71,6 @@ export interface AppSettings {
   hasOpenrouterKey?: boolean
 }
 
-export interface TranscriptResult {
-  text: string
-}
-
 export interface SttStatus {
   state: 'idle' | 'loading-model' | 'ready' | 'transcribing' | 'error'
   message?: string

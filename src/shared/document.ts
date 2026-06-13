@@ -1,27 +1,33 @@
 import type { Meeting, TimelineEntry } from './types'
 
-const NOTES_HEADER = '## Notes'
-const DIVIDER = '\n\n---\n\n'
-
 const ACTION_SECTION_KEYWORDS = ['action items', 'action points', 'action item']
 const OVERVIEW_SECTION_KEYWORDS = ['meeting overview', 'overview', 'summary']
 
-/** Pin Action Items first, then Meeting Overview; preserve relative order of other sections. */
-export function reorderSummarySections(summary: string): string {
-  const trimmed = summary.trim()
-  if (!trimmed) return trimmed
+type SummarySection = { title: string; body: string; order: number }
 
+function splitSummarySections(summary: string): SummarySection[] {
+  const trimmed = summary.trim()
   const re = /^### (.+)$/gm
   const matches = [...trimmed.matchAll(re)]
-  if (matches.length === 0) return trimmed
+  if (matches.length === 0) return [{ title: '', body: trimmed, order: 0 }]
 
-  const sections: { title: string; body: string; order: number }[] = []
+  const sections: SummarySection[] = []
   for (let i = 0; i < matches.length; i++) {
     const title = matches[i][1].trim()
     const start = (matches[i].index ?? 0) + matches[i][0].length
     const end = i + 1 < matches.length ? matches[i + 1].index! : trimmed.length
     sections.push({ title, body: trimmed.slice(start, end).trim(), order: i })
   }
+  return sections
+}
+
+/** Pin Action Items first, then Meeting Overview; preserve relative order of other sections. */
+function reorderSummarySections(summary: string): string {
+  const trimmed = summary.trim()
+  if (!trimmed) return trimmed
+
+  const sections = splitSummarySections(trimmed)
+  if (sections.length === 1 && !sections[0].title) return trimmed
 
   const rank = (title: string) => {
     const lower = title.toLowerCase()
@@ -43,20 +49,8 @@ function isActionSection(title: string): boolean {
   return ACTION_SECTION_KEYWORDS.some((k) => lower.includes(k))
 }
 
-function parseSummarySections(summary: string): { title: string; body: string; order: number }[] {
-  const trimmed = summary.trim()
-  const re = /^### (.+)$/gm
-  const matches = [...trimmed.matchAll(re)]
-  if (matches.length === 0) return [{ title: '', body: trimmed, order: 0 }]
-
-  const sections: { title: string; body: string; order: number }[] = []
-  for (let i = 0; i < matches.length; i++) {
-    const title = matches[i][1].trim()
-    const start = (matches[i].index ?? 0) + matches[i][0].length
-    const end = i + 1 < matches.length ? matches[i + 1].index! : trimmed.length
-    sections.push({ title, body: trimmed.slice(start, end).trim(), order: i })
-  }
-  return sections
+function parseSummarySections(summary: string): SummarySection[] {
+  return splitSummarySections(summary.trim())
 }
 
 function normalizeTaskKey(line: string): string {
@@ -181,40 +175,6 @@ export function notesDocumentToTimeline(doc: string): TimelineEntry[] {
   return timeline
 }
 
-/** @deprecated Use meetingToNotesDocument — kept for legacy combined docs. */
-export function meetingToDocument(m: Pick<Meeting, 'summary' | 'timeline'>): string {
-  const parts: string[] = []
-  const summary = m.summary.trim()
-  if (summary) {
-    parts.push(`${NOTES_HEADER}\n\n${summary}`)
-  }
-  const notes = m.timeline.filter((e) => e.kind !== 'transcript')
-  if (notes.length > 0) {
-    const body = notes.map(formatNoteEntry).join('\n\n')
-    if (parts.length > 0) parts.push('---', body)
-    else parts.push(body)
-  }
-  return parts.join('\n\n') + (parts.length > 0 ? '\n' : '')
-}
-
-/** @deprecated Legacy parser for combined summary+notes documents. */
-export function documentToMeeting(doc: string): { summary: string; timeline: TimelineEntry[] } {
-  let text = doc.trim()
-  let summary = ''
-
-  const dividerIdx = text.indexOf(DIVIDER.trim())
-  if (dividerIdx >= 0) {
-    const top = text.slice(0, dividerIdx).trim()
-    text = text.slice(dividerIdx + DIVIDER.trim().length).trim()
-    summary = top.replace(new RegExp(`^${NOTES_HEADER}\\s*`, 'm'), '').trim()
-  } else if (text.startsWith(NOTES_HEADER)) {
-    summary = text.replace(new RegExp(`^${NOTES_HEADER}\\s*`, 'm'), '').trim()
-    text = ''
-  }
-
-  return { summary, timeline: notesDocumentToTimeline(text) }
-}
-
 /** Merge edited manual notes into a meeting, preserving summary and transcripts. */
 export function mergeNotesIntoMeeting(
   meeting: Pick<Meeting, 'summary' | 'timeline'>,
@@ -245,11 +205,6 @@ export function formatTranscriptPlain(m: Pick<Meeting, 'timeline'>): string {
   return getTranscriptLines(m)
     .map((l) => `[${l.timeLabel}] ${l.text}`)
     .join('\n\n')
-}
-
-/** Plain-text manual notes for copy. */
-export function formatNotesPlain(m: Pick<Meeting, 'timeline'>): string {
-  return meetingToNotesDocument(m).trim()
 }
 
 /** Searchable plain text for a meeting (title excluded — caller adds that). */
@@ -296,7 +251,5 @@ export function parseTranscriptLinkHref(href: string): number | null {
   let m = trimmed.match(/^transcript:(\d+)$/)
   if (m) return Number(m[1])
   m = trimmed.match(/^https:\/\/local-transcript\.link\/(\d+)$/)
-  if (m) return Number(m[1])
-  m = trimmed.match(/^#transcript-(\d+)$/)
   return m ? Number(m[1]) : null
 }

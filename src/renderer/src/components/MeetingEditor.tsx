@@ -4,11 +4,10 @@ import { SuggestionMenuController, useCreateBlockNote } from '@blocknote/react'
 import '@blocknote/react/style.css'
 import { autoPlacement, offset, shift } from '@floating-ui/react'
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react'
-import { assetUrl } from './Markdown'
+import { assetUrl } from '../utils/assetUrl'
 import SlashPillMenu, { getSlashPillItems } from './SlashPillMenu'
 
 export interface MeetingEditorHandle {
-  appendMarkdown: (markdown: string) => void
   getMarkdown: () => string
   insertImage: (path: string) => void
 }
@@ -113,13 +112,6 @@ const MeetingEditor = forwardRef<MeetingEditorHandle, Props>(function MeetingEdi
   }
 
   useImperativeHandle(ref, () => ({
-    appendMarkdown(markdown: string) {
-      const blocks = editor.tryParseMarkdownToBlocks(
-        toEditorMarkdown(markdown, meetingIdRef.current)
-      )
-      const last = editor.document[editor.document.length - 1]
-      editor.insertBlocks(blocks, last, 'after')
-    },
     getMarkdown() {
       const raw = toStorageMarkdown(editor.blocksToMarkdownLossy(), meetingIdRef.current)
       return serializeRef.current ? serializeRef.current(raw) : raw

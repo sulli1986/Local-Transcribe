@@ -124,10 +124,6 @@ function registerIpc(): void {
   ipcMain.handle('vault:appendEntry', (_e, id: string, entry: TimelineEntry) =>
     vault.appendEntry(id, entry)
   )
-  ipcMain.handle('vault:updateEntry', (_e, id: string, index: number, content: string) =>
-    vault.updateEntry(id, index, content)
-  )
-  ipcMain.handle('vault:deleteEntry', (_e, id: string, index: number) => vault.deleteEntry(id, index))
   ipcMain.handle('vault:setSummary', (_e, id: string, summary: string) =>
     vault.setSummary(id, summary)
   )
@@ -136,9 +132,6 @@ function registerIpc(): void {
   )
   ipcMain.handle('vault:saveImageAsset', (_e, id: string, data: Uint8Array, ext: string) =>
     vault.saveImageAsset(id, data, ext)
-  )
-  ipcMain.handle('vault:saveImage', (_e, id: string, data: Uint8Array, ext: string, timeSec: number) =>
-    vault.saveImage(id, data, ext, timeSec)
   )
   ipcMain.handle('vault:openFolder', (_e, id: string) =>
     shell.openPath(vault.assetPath(id, '.'))

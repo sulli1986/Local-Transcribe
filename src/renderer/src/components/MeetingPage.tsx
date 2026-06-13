@@ -9,7 +9,7 @@ import {
 } from '../../../shared/document'
 import { tagStylePlain } from '../../../shared/colors'
 import { useRecorder, fmtClock } from '../hooks/useRecorder'
-import { assetUrl } from './Markdown'
+import { assetUrl } from '../utils/assetUrl'
 import MeetingEditor, { type MeetingEditorHandle } from './MeetingEditor'
 import SummaryPanel from './SummaryPanel'
 import TranscriptPanel from './TranscriptPanel'

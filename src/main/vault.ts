@@ -225,18 +225,6 @@ export class Vault {
     })
   }
 
-  async updateEntry(id: string, index: number, content: string): Promise<Meeting> {
-    return this.mutate(id, (m) => {
-      if (m.timeline[index]) m.timeline[index].content = content
-    })
-  }
-
-  async deleteEntry(id: string, index: number): Promise<Meeting> {
-    return this.mutate(id, (m) => {
-      m.timeline.splice(index, 1)
-    })
-  }
-
   async setSummary(id: string, summary: string, markSummarized = false): Promise<Meeting> {
     return this.mutate(id, (m) => {
       m.summary = summary
@@ -260,15 +248,6 @@ export class Vault {
     return `${ASSETS_DIR}/${file}`
   }
 
-  async saveImage(id: string, data: Uint8Array, ext: string, timeSec: number): Promise<Meeting> {
-    const rel = await this.saveImageAsset(id, data, ext)
-    return this.appendEntry(id, {
-      kind: 'image',
-      timeSec,
-      content: `![image](${rel})`
-    })
-  }
-
   async startRecording(id: string): Promise<void> {
     await this.clearAllRecordings(id)
     await this.mutate(id, (m) => {
@@ -280,10 +259,6 @@ export class Vault {
     const m = await this.getMeeting(id)
     const file = m.recordingFile || RECORDING_FILE
     await fs.appendFile(path.join(this.dir(id), file), chunk)
-  }
-
-  async clearRecording(id: string): Promise<void> {
-    if (existsSync(this.recordingPath(id))) await fs.rm(this.recordingPath(id))
   }
 
   private async clearAllRecordings(id: string): Promise<void> {

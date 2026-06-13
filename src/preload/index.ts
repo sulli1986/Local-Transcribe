@@ -29,18 +29,12 @@ const api = {
     ipcRenderer.invoke('vault:setStatus', id, status, durationSec),
   appendEntry: (id: string, entry: TimelineEntry): Promise<Meeting> =>
     ipcRenderer.invoke('vault:appendEntry', id, entry),
-  updateEntry: (id: string, index: number, content: string): Promise<Meeting> =>
-    ipcRenderer.invoke('vault:updateEntry', id, index, content),
-  deleteEntry: (id: string, index: number): Promise<Meeting> =>
-    ipcRenderer.invoke('vault:deleteEntry', id, index),
   setSummary: (id: string, summary: string): Promise<Meeting> =>
     ipcRenderer.invoke('vault:setSummary', id, summary),
   setBody: (id: string, summary: string, timeline: TimelineEntry[]): Promise<Meeting> =>
     ipcRenderer.invoke('vault:setBody', id, summary, timeline),
   saveImageAsset: (id: string, data: Uint8Array, ext: string): Promise<string> =>
     ipcRenderer.invoke('vault:saveImageAsset', id, data, ext),
-  saveImage: (id: string, data: Uint8Array, ext: string, timeSec: number): Promise<Meeting> =>
-    ipcRenderer.invoke('vault:saveImage', id, data, ext, timeSec),
   openFolder: (id: string): Promise<void> => ipcRenderer.invoke('vault:openFolder', id),
   searchMeetings: (query: string): Promise<import('../shared/types').SearchResult[]> =>
     ipcRenderer.invoke('vault:search', query),
