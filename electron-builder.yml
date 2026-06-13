@@ -1,0 +1,33 @@
+appId: com.davids.localtranscribe
+productName: Local Transcribe
+directories:
+  output: release
+  buildResources: build
+files:
+  - out/**/*
+  - package.json
+  # Strip ONNX runtimes for platforms/accelerators we don't ship
+  - "!node_modules/onnxruntime-node/bin/napi-v6/darwin/**"
+  - "!node_modules/onnxruntime-node/bin/napi-v6/**/libonnxruntime_providers_cuda.so"
+  - "!node_modules/onnxruntime-node/bin/napi-v6/**/libonnxruntime_providers_tensorrt.so"
+  - "!node_modules/onnxruntime-node/bin/napi-v6/**/onnxruntime_providers_cuda.dll"
+  - "!node_modules/onnxruntime-node/bin/napi-v6/**/onnxruntime_providers_tensorrt.dll"
+# Keep files unpacked: the Whisper worker thread and onnxruntime's native
+# binding cannot load reliably from inside an asar archive.
+asar: false
+linux:
+  target:
+    - AppImage
+  category: Office
+  maintainer: davids
+  files:
+    - "!node_modules/onnxruntime-node/bin/napi-v6/win32/**"
+win:
+  target:
+    - nsis
+  files:
+    - "!node_modules/onnxruntime-node/bin/napi-v6/linux/**"
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+npmRebuild: false

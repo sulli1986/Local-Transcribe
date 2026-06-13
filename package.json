@@ -1,0 +1,37 @@
+{
+  "name": "local-transcribe",
+  "version": "0.1.0",
+  "description": "Local meeting transcriber with AI notes - records, transcribes, and summarizes meetings into plain Markdown files",
+  "main": "out/main/index.js",
+  "author": "davids",
+  "homepage": "https://github.com/davids/local-transcribe",
+  "license": "MIT",
+  "private": true,
+  "scripts": {
+    "dev": "electron-vite dev",
+    "dev:nix": "bash scripts/dev-nix.sh",
+    "build": "electron-vite build",
+    "start": "electron-vite build && electron .",
+    "start:nix": "electron-vite build && nix-shell -p electron --run 'electron .'",
+    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
+    "package:linux": "electron-vite build && electron-builder --linux",
+    "package:win": "electron-vite build && electron-builder --win"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^5.2.0",
+    "electron": "^41.7.2",
+    "electron-builder": "^26.15.3",
+    "electron-vite": "^5.0.0",
+    "marked": "^18.0.5",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "typescript": "^6.0.3",
+    "vite": "^7.3.5"
+  },
+  "dependencies": {
+    "@huggingface/transformers": "^4.2.0",
+    "gray-matter": "^4.0.3"
+  }
+}
