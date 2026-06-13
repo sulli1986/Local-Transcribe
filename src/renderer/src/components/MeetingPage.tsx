@@ -1,8 +1,21 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { AppSettings, Meeting, SttStatus, TimelineEntry } from '../../../shared/types'
+import type { AppSettings, Meeting, SttStatus } from '../../../shared/types'
+import {
+  formatTranscriptPlain,
+  getTranscriptLines,
+  meetingToNotesDocument,
+  mergeNotesIntoMeeting,
+  normalizeSummary
+} from '../../../shared/document'
+import { tagStylePlain } from '../../../shared/colors'
 import { useRecorder, fmtClock } from '../hooks/useRecorder'
-import Markdown, { assetUrl } from './Markdown'
+import { assetUrl } from './Markdown'
+import MeetingEditor, { type MeetingEditorHandle } from './MeetingEditor'
+import SummaryPanel from './SummaryPanel'
+import TranscriptPanel from './TranscriptPanel'
+import Icon from './Icons'
 import { useToast } from '../toast'
+import { transcribeAudioFromUrl } from '../utils/transcribeAudioFile'
 
 interface Props {
   id: string
@@ -13,6 +26,8 @@ interface Props {
   onDelete: () => void
 }
 
+type Tab = 'summary' | 'notes' | 'transcript'
+
 /** Strip Whisper noise artifacts like [BLANK_AUDIO], (keyboard clacking), ♪ etc. */
 function cleanTranscript(text: string): string {
   const cleaned = text
@@ -21,6 +36,10 @@ function cleanTranscript(text: string): string {
     .replace(/♪/g, '')
     .trim()
   return cleaned
+}
+
+async function copyText(text: string): Promise<void> {
+  await navigator.clipboard.writeText(text)
 }
 
 export default function MeetingPage({
@@ -34,61 +53,166 @@ export default function MeetingPage({
   const toast = useToast()
   const [meeting, setMeeting] = useState<Meeting | null>(null)
   const [title, setTitle] = useState('')
-  const [note, setNote] = useState('')
-  const [pendingChunks, setPendingChunks] = useState<number[]>([])
+  const [docText, setDocText] = useState('')
+  const [syncKey, setSyncKey] = useState(0)
+  const [summaryText, setSummaryText] = useState('')
+  const [summarySyncKey, setSummarySyncKey] = useState(0)
+  const [tab, setTab] = useState<Tab>('notes')
+  const [searchQuery, setSearchQuery] = useState('')
+  const [pendingChunks, setPendingChunks] = useState(0)
   const [generating, setGenerating] = useState(false)
+  const [importing, setImporting] = useState(false)
+  const [importProgress, setImportProgress] = useState<{ done: number; total: number } | null>(
+    null
+  )
   const [sttStatus, setSttStatus] = useState<SttStatus>({ state: 'idle' })
   const [dragOver, setDragOver] = useState(false)
+  const [tagDraft, setTagDraft] = useState('')
+  const [audioTimeSec, setAudioTimeSec] = useState<number | undefined>()
+  const [jumpTimeSec, setJumpTimeSec] = useState<number | undefined>()
 
-  const scrollRef = useRef<HTMLDivElement>(null)
   const queueRef = useRef(Promise.resolve())
   const pidRef = useRef(1)
   const dragDepth = useRef(0)
+  const dirtyRef = useRef(false)
+  const summaryDirtyRef = useRef(false)
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const summarySaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const docTextRef = useRef(docText)
+  const summaryTextRef = useRef(summaryText)
+  const meetingRef = useRef(meeting)
+  docTextRef.current = docText
+  summaryTextRef.current = summaryText
+  meetingRef.current = meeting
+  const editorRef = useRef<MeetingEditorHandle>(null)
+  const summaryEditorRef = useRef<MeetingEditorHandle>(null)
+  const audioRef = useRef<HTMLAudioElement>(null)
 
   const isRecording = recordingId === id
 
+  const loadDocument = useCallback((m: Meeting, reloadNotes = true, reloadSummary = true) => {
+    setMeeting(m)
+    setDocText(meetingToNotesDocument(m))
+    setSummaryText(m.summary)
+    dirtyRef.current = false
+    summaryDirtyRef.current = false
+    if (reloadNotes) setSyncKey((k) => k + 1)
+    if (reloadSummary) setSummarySyncKey((k) => k + 1)
+  }, [])
+
   useEffect(() => {
     window.api.getMeeting(id).then((m) => {
-      setMeeting(m)
+      loadDocument(m)
       setTitle(m.title)
+      setTab(m.summary.trim() ? 'summary' : 'notes')
+      setSearchQuery('')
+      setTagDraft('')
     })
-  }, [id])
+  }, [id, loadDocument])
 
   useEffect(() => {
     return window.api.onSttStatus(setSttStatus)
   }, [])
 
-  // Keep the timeline pinned to the bottom while recording
-  useEffect(() => {
-    if (isRecording && scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight
-    }
-  }, [meeting?.timeline.length, pendingChunks.length, isRecording])
-
-  const recorder = useRecorder({
-    onSpeechChunk: (audio, startSec) => {
-      const pid = pidRef.current++
-      setPendingChunks((p) => [...p, pid])
-      queueRef.current = queueRef.current.then(async () => {
-        try {
-          const text = cleanTranscript(await window.api.transcribe(audio))
-          if (text) {
-            const m = await window.api.appendEntry(id, {
-              kind: 'transcript',
-              timeSec: Math.round(startSec),
-              content: text
-            })
-            setMeeting(m)
-          }
-        } catch (err) {
-          toast.show(`Transcription failed: ${err instanceof Error ? err.message : err}`, true)
-        } finally {
-          setPendingChunks((p) => p.filter((x) => x !== pid))
-        }
-      })
+  const saveDocument = useCallback(
+    async (text: string) => {
+      const current = meetingRef.current
+      if (!current) return
+      const { summary, timeline } = mergeNotesIntoMeeting(current, text)
+      const m = await window.api.setBody(id, summary, timeline)
+      setMeeting(m)
+      dirtyRef.current = false
+      onMetaChanged()
     },
-    onRecordingChunk: (data) => window.api.appendRecordingChunk(id, data)
-  })
+    [id, onMetaChanged]
+  )
+
+  const scheduleSave = useCallback(
+    (text: string) => {
+      dirtyRef.current = true
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
+      saveTimerRef.current = setTimeout(() => {
+        saveDocument(text).catch((err) =>
+          toast.show(`Could not save: ${err instanceof Error ? err.message : err}`, true)
+        )
+      }, 500)
+    },
+    [saveDocument, toast]
+  )
+
+  const handleDocChange = useCallback(
+    (next: string) => {
+      setDocText(next)
+      scheduleSave(next)
+    },
+    [scheduleSave]
+  )
+
+  const saveSummaryNow = useCallback(
+    async (text: string) => {
+      const m = await window.api.setSummary(id, text)
+      setMeeting(m)
+      summaryDirtyRef.current = false
+      onMetaChanged()
+    },
+    [id, onMetaChanged]
+  )
+
+  const scheduleSummarySave = useCallback(
+    (text: string) => {
+      summaryDirtyRef.current = true
+      if (summarySaveTimerRef.current) clearTimeout(summarySaveTimerRef.current)
+      summarySaveTimerRef.current = setTimeout(() => {
+        saveSummaryNow(text).catch((err) =>
+          toast.show(`Could not save summary: ${err instanceof Error ? err.message : err}`, true)
+        )
+      }, 500)
+    },
+    [saveSummaryNow, toast]
+  )
+
+  const handleSummaryChange = useCallback(
+    (next: string) => {
+      setSummaryText(next)
+      scheduleSummarySave(next)
+    },
+    [scheduleSummarySave]
+  )
+
+  const persistMic = useCallback(
+    (micId: string) => {
+      window.api.updateSettings({ preferredMicId: micId }).catch(() => {})
+    },
+    []
+  )
+
+  const recorder = useRecorder(
+    {
+      onSpeechChunk: (audio, startSec) => {
+        const pid = pidRef.current++
+        setPendingChunks((p) => p + 1)
+        queueRef.current = queueRef.current.then(async () => {
+          try {
+            const text = cleanTranscript(await window.api.transcribe(audio))
+            if (text) {
+              const m = await window.api.appendEntry(id, {
+                kind: 'transcript',
+                timeSec: Math.round(startSec),
+                content: text
+              })
+              loadDocument(m, !dirtyRef.current, !summaryDirtyRef.current)
+            }
+          } catch (err) {
+            toast.show(`Transcription failed: ${err instanceof Error ? err.message : err}`, true)
+          } finally {
+            setPendingChunks((p) => p - 1)
+          }
+        })
+      },
+      onRecordingChunk: (data) => window.api.appendRecordingChunk(id, data)
+    },
+    { preferredMicId: settings.preferredMicId }
+  )
 
   const startRecording = useCallback(async () => {
     if (recordingId && recordingId !== id) {
@@ -102,6 +226,7 @@ export default function MeetingPage({
       })
       await recorder.start()
       setRecordingId(id)
+      setTab('transcript')
     } catch (err) {
       toast.show(`Could not start recording: ${err instanceof Error ? err.message : err}`, true)
     }
@@ -110,16 +235,25 @@ export default function MeetingPage({
   const generateNotes = useCallback(async () => {
     setGenerating(true)
     try {
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
+      if (summarySaveTimerRef.current) clearTimeout(summarySaveTimerRef.current)
+      const current = editorRef.current?.getMarkdown() ?? docTextRef.current
+      await saveDocument(current)
+      const currentSummary = summaryEditorRef.current?.getMarkdown() ?? summaryTextRef.current
+      await saveSummaryNow(currentSummary)
       const m = await window.api.generateNotes(id)
       setMeeting(m)
+      setSummaryText(m.summary)
+      setSummarySyncKey((k) => k + 1)
+      setTab('summary')
       onMetaChanged()
-      toast.show('Meeting notes generated')
+      toast.show('Summary generated')
     } catch (err) {
       toast.show(`${err instanceof Error ? err.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '') : err}`, true)
     } finally {
       setGenerating(false)
     }
-  }, [id, onMetaChanged, toast])
+  }, [id, onMetaChanged, saveDocument, saveSummaryNow, toast])
 
   const stopRecording = useCallback(async () => {
     const duration = await recorder.stop()
@@ -127,71 +261,104 @@ export default function MeetingPage({
     const m = await window.api.setStatus(id, 'recorded', duration)
     setMeeting({ ...m, hasRecording: true })
     onMetaChanged()
-    // Wait for in-flight transcription chunks before summarizing
     await queueRef.current
     const fresh = await window.api.getMeeting(id)
-    setMeeting(fresh)
-    if (fresh.timeline.some((e) => e.kind !== 'image' && e.content.trim())) {
+    loadDocument(fresh, !dirtyRef.current, !summaryDirtyRef.current)
+    const hasContent =
+      fresh.timeline.some((e) => e.kind === 'transcript') ||
+      fresh.timeline.some((e) => e.kind === 'note' && e.content.trim())
+    if (settings.autoGenerateNotes && hasContent) {
       await generateNotes()
+    } else if (meetingRef.current?.summary.trim()) {
+      setTab('summary')
     }
-  }, [id, recorder, setRecordingId, onMetaChanged, generateNotes])
+  }, [id, recorder, setRecordingId, onMetaChanged, generateNotes, loadDocument, settings.autoGenerateNotes])
 
-  const sendNote = useCallback(async () => {
-    const content = note.trim()
-    if (!content || !meeting) return
-    setNote('')
-    const entry: TimelineEntry = {
-      kind: 'note',
-      timeSec: isRecording ? recorder.elapsedSec : meeting.durationSec,
-      content
+  const importAudio = useCallback(async () => {
+    if (isRecording) return
+    setImporting(true)
+    setImportProgress(null)
+    try {
+      const m = await window.api.pickImportAudio(id)
+      if (!m) return
+      loadDocument(m, !dirtyRef.current, !summaryDirtyRef.current)
+      onMetaChanged()
+      setTab('transcript')
+      window.api.prepareStt().catch(() => {})
+      const url = assetUrl(id, m.recordingFile)
+      const duration = await transcribeAudioFromUrl(
+        url,
+        (audio) => window.api.transcribe(audio),
+        async (text, startSec) => {
+          const cleaned = cleanTranscript(text)
+          if (!cleaned) return
+          const updated = await window.api.appendEntry(id, {
+            kind: 'transcript',
+            timeSec: startSec,
+            content: cleaned
+          })
+          loadDocument(updated, !dirtyRef.current, !summaryDirtyRef.current)
+        },
+        setImportProgress
+      )
+      const updated = await window.api.setStatus(id, 'recorded', duration)
+      setMeeting({ ...updated, hasRecording: true })
+      onMetaChanged()
+      toast.show('Audio imported and transcribed')
+      if (settings.autoGenerateNotes) {
+        await generateNotes()
+      }
+    } catch (err) {
+      toast.show(`Import failed: ${err instanceof Error ? err.message : err}`, true)
+    } finally {
+      setImporting(false)
+      setImportProgress(null)
     }
-    const m = await window.api.appendEntry(id, entry)
-    setMeeting(m)
-  }, [note, meeting, id, isRecording, recorder.elapsedSec])
+  }, [
+    id,
+    isRecording,
+    loadDocument,
+    onMetaChanged,
+    settings.autoGenerateNotes,
+    generateNotes,
+    toast
+  ])
 
   const saveImageFile = useCallback(
-    async (file: File | Blob, nameHint?: string) => {
-      if (!meeting) return
-      const ext =
-        (nameHint?.split('.').pop() || file.type.split('/')[1] || 'png').toLowerCase()
+    async (file: File | Blob, nameHint?: string): Promise<string | null> => {
+      const ext = (nameHint?.split('.').pop() || file.type.split('/')[1] || 'png').toLowerCase()
       const data = new Uint8Array(await file.arrayBuffer())
-      const m = await window.api.saveImage(
-        id,
-        data,
-        ext,
-        isRecording ? recorder.elapsedSec : meeting.durationSec
-      )
-      setMeeting(m)
+      try {
+        return await window.api.saveImageAsset(id, data, ext)
+      } catch (err) {
+        toast.show(`Could not save image: ${err instanceof Error ? err.message : err}`, true)
+        return null
+      }
     },
-    [meeting, id, isRecording, recorder.elapsedSec]
+    [id, toast]
   )
 
-  const handlePaste = useCallback(
-    (e: React.ClipboardEvent) => {
-      for (const item of e.clipboardData.items) {
-        if (item.type.startsWith('image/')) {
-          const file = item.getAsFile()
-          if (file) {
-            e.preventDefault()
-            saveImageFile(file)
-            return
+  const handleDrop = useCallback(
+    async (e: React.DragEvent) => {
+      if (tab !== 'notes' && tab !== 'summary') return
+      e.preventDefault()
+      dragDepth.current = 0
+      setDragOver(false)
+      const activeEditor = tab === 'summary' ? summaryEditorRef : editorRef
+      const onChange = tab === 'summary' ? handleSummaryChange : handleDocChange
+      const textRef = tab === 'summary' ? summaryTextRef : docTextRef
+      for (const file of Array.from(e.dataTransfer.files)) {
+        if (file.type.startsWith('image/')) {
+          const path = await saveImageFile(file, file.name)
+          if (path) {
+            activeEditor.current?.insertImage(path)
+            const next = activeEditor.current?.getMarkdown() ?? textRef.current
+            onChange(next)
           }
         }
       }
     },
-    [saveImageFile]
-  )
-
-  const handleDrop = useCallback(
-    (e: React.DragEvent) => {
-      e.preventDefault()
-      dragDepth.current = 0
-      setDragOver(false)
-      for (const file of Array.from(e.dataTransfer.files)) {
-        if (file.type.startsWith('image/')) saveImageFile(file, file.name)
-      }
-    },
-    [saveImageFile]
+    [saveImageFile, handleDocChange, handleSummaryChange, tab]
   )
 
   const saveTitle = useCallback(async () => {
@@ -202,23 +369,111 @@ export default function MeetingPage({
     onMetaChanged()
   }, [id, title, meeting, onMetaChanged])
 
-  const updateEntry = useCallback(
-    async (index: number, content: string) => {
-      const m = content.trim()
-        ? await window.api.updateEntry(id, index, content.trim())
-        : await window.api.deleteEntry(id, index)
+  const saveTags = useCallback(
+    async (tags: string[]) => {
+      const m = await window.api.setTags(id, tags)
       setMeeting(m)
+      onMetaChanged()
     },
-    [id]
+    [id, onMetaChanged]
   )
 
-  const setSummary = useCallback(
-    async (summary: string) => {
-      const m = await window.api.setSummary(id, summary)
-      setMeeting(m)
+  const addTag = useCallback(() => {
+    const next = tagDraft.trim().replace(/^#/, '')
+    if (!next || !meeting) return
+    const tags = [...(meeting.tags ?? [])]
+    if (tags.some((t) => t.toLowerCase() === next.toLowerCase())) {
+      setTagDraft('')
+      return
+    }
+    void saveTags([...tags, next])
+    setTagDraft('')
+  }, [tagDraft, meeting, saveTags])
+
+  const removeTag = useCallback(
+    (tag: string) => {
+      if (!meeting?.tags) return
+      void saveTags(meeting.tags.filter((t) => t !== tag))
     },
-    [id]
+    [meeting, saveTags]
   )
+
+  const seekToTime = useCallback((timeSec: number) => {
+    const audio = audioRef.current
+    if (audio) audio.currentTime = timeSec
+  }, [])
+
+  const seekAudio = useCallback(
+    (timeSec: number) => {
+      seekToTime(timeSec)
+      void audioRef.current?.play().catch(() => {})
+    },
+    [seekToTime]
+  )
+
+  const goToTranscript = useCallback(
+    (timeSec: number) => {
+      setTab('transcript')
+      setJumpTimeSec(timeSec)
+      seekToTime(timeSec)
+      window.setTimeout(() => setJumpTimeSec(undefined), 2500)
+    },
+    [seekToTime]
+  )
+
+  const copyTranscript = useCallback(async () => {
+    if (!meeting) return
+    const text = formatTranscriptPlain(meeting)
+    if (!text.trim()) {
+      toast.show('No transcript to copy', true)
+      return
+    }
+    await copyText(text)
+    toast.show('Transcript copied')
+  }, [meeting, toast])
+
+  const copySummary = useCallback(async () => {
+    if (!meeting?.summary.trim()) {
+      toast.show('No summary to copy', true)
+      return
+    }
+    await copyText(normalizeSummary(meeting.summary))
+    toast.show('Summary copied')
+  }, [meeting, toast])
+
+
+  const tagCategoryNames = useMemo(
+    () => settings.tagCategories?.map((c) => c.name) ?? [],
+    [settings.tagCategories]
+  )
+
+  const copyNotes = useCallback(async () => {
+    const text = docTextRef.current.trim()
+    if (!text) {
+      toast.show('No notes to copy', true)
+      return
+    }
+    await copyText(text)
+    toast.show('Notes copied')
+  }, [toast])
+
+  const exportMeeting = useCallback(async () => {
+    const path = await window.api.exportMeeting(id)
+    if (path) toast.show(`Exported to ${path}`)
+  }, [id, toast])
+
+  const transcriptLines = useMemo(
+    () => (meeting ? getTranscriptLines(meeting) : []),
+    [meeting]
+  )
+
+  const transcriptCount = transcriptLines.length
+
+  const notesSearchHaystack = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase()
+    if (!q || tab !== 'notes') return true
+    return docText.toLowerCase().includes(q)
+  }, [docText, searchQuery, tab])
 
   const createdLabel = useMemo(() => {
     if (!meeting) return ''
@@ -231,14 +486,14 @@ export default function MeetingPage({
   if (!meeting) return null
 
   const sttPill = (() => {
-    if (!isRecording && sttStatus.state !== 'loading-model') return null
+    if (!isRecording && !importing && sttStatus.state !== 'loading-model') return null
     switch (sttStatus.state) {
       case 'loading-model':
         return <span className="stt-pill">{sttStatus.message ?? 'Loading model…'}</span>
       case 'transcribing':
         return <span className="stt-pill">Transcribing…</span>
       case 'ready':
-        return <span className="stt-pill">Listening — speech will appear below</span>
+        return <span className="stt-pill">Listening — transcript updating live</span>
       case 'error':
         return <span className="stt-pill error">STT error: {sttStatus.message}</span>
       default:
@@ -246,10 +501,18 @@ export default function MeetingPage({
     }
   })()
 
+  const hasNotes = docText.trim().length > 0
+  const hasSummary = Boolean(summaryText.trim() || meeting.summary.trim())
+  const canSeek = meeting.hasRecording && !isRecording
+  const canGenerate =
+    transcriptCount > 0 ||
+    meeting.timeline.some((e) => e.kind === 'note' && e.content.trim())
+
   return (
     <div
       className="meeting-page"
       onDragEnter={(e) => {
+        if (tab !== 'notes' && tab !== 'summary') return
         e.preventDefault()
         if (e.dataTransfer.types.includes('Files')) {
           dragDepth.current++
@@ -260,10 +523,14 @@ export default function MeetingPage({
         dragDepth.current = Math.max(0, dragDepth.current - 1)
         if (dragDepth.current === 0) setDragOver(false)
       }}
-      onDragOver={(e) => e.preventDefault()}
+      onDragOver={(e) => (tab === 'notes' || tab === 'summary') && e.preventDefault()}
       onDrop={handleDrop}
     >
-      {dragOver && <div className="drop-overlay">Drop image to add it to the meeting</div>}
+      {dragOver && (tab === 'notes' || tab === 'summary') && (
+        <div className="drop-overlay">
+          Drop image to insert into your {tab === 'summary' ? 'summary' : 'notes'}
+        </div>
+      )}
 
       <div className="meeting-header">
         <input
@@ -274,80 +541,237 @@ export default function MeetingPage({
           onBlur={saveTitle}
           onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
         />
+        <div className="meeting-tags-row">
+          {(meeting.tags ?? []).map((tag) => {
+            const style = tagStylePlain(tag, settings.tagCategories ?? [])
+            return (
+              <span
+                key={tag}
+                className="meeting-tag"
+                style={{
+                  color: style.color,
+                  background: style.background,
+                  borderColor: style.borderColor
+                }}
+              >
+                <span className="tag-dot" style={{ background: style.color }} />
+                {tag}
+                <button
+                  type="button"
+                  className="tag-remove"
+                  onClick={() => removeTag(tag)}
+                  aria-label={`Remove ${tag}`}
+                >
+                  ×
+                </button>
+              </span>
+            )
+          })}
+          <Icon name="tag" size={14} className="tag-input-icon" />
+          <input
+            className="tag-input"
+            placeholder="Add tag…"
+            list="tag-category-suggestions"
+            value={tagDraft}
+            onChange={(e) => setTagDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault()
+                addTag()
+              }
+            }}
+            onBlur={addTag}
+          />
+          <datalist id="tag-category-suggestions">
+            {tagCategoryNames.map((name) => (
+              <option key={name} value={name} />
+            ))}
+          </datalist>
+        </div>
         <div className="meeting-meta-row">
           <span>{createdLabel}</span>
           {meeting.durationSec > 0 && <span>{fmtClock(meeting.durationSec)}</span>}
-          <button className="link-btn" onClick={() => window.api.openFolder(id)}>
-            Open folder
+          <button className="link-btn with-icon" onClick={() => window.api.openFolder(id)}>
+            <Icon name="folder" size={14} /> Open folder
           </button>
-          <button className="link-btn" onClick={onDelete}>
-            Delete
+          <button className="link-btn with-icon danger-link" onClick={onDelete}>
+            <Icon name="trash" size={14} /> Delete
           </button>
         </div>
       </div>
 
-      <div className="meeting-scroll" ref={scrollRef}>
+      <div className="meeting-scroll">
         <div className="meeting-scroll-inner">
-          {(meeting.summary || generating || (meeting.status !== 'new' && !isRecording)) && (
-            <div className="summary-card">
-              <div className="summary-card-header">
-                <span>AI meeting notes</span>
-                <span className="spacer" />
-                {!generating && meeting.timeline.length > 0 && (
-                  <button className="secondary-btn" onClick={generateNotes}>
-                    {meeting.summary ? 'Regenerate' : 'Generate'}
-                  </button>
-                )}
-              </div>
+          <div className="meeting-tabs-row">
+            <div className="meeting-tabs">
+              <button
+                type="button"
+                className={`meeting-tab${tab === 'summary' ? ' active' : ''}`}
+                onClick={() => setTab('summary')}
+              >
+                <Icon name="summary" size={15} /> Summary
+                {hasSummary && <span className="tab-badge">✓</span>}
+              </button>
+              <button
+                type="button"
+                className={`meeting-tab${tab === 'notes' ? ' active' : ''}`}
+                onClick={() => setTab('notes')}
+              >
+                <Icon name="notes" size={15} /> Notes
+              </button>
+              <button
+                type="button"
+                className={`meeting-tab${tab === 'transcript' ? ' active' : ''}`}
+                onClick={() => setTab('transcript')}
+              >
+                <Icon name="transcript" size={15} /> Transcript
+                {transcriptCount > 0 && <span className="tab-badge">{transcriptCount}</span>}
+                {isRecording && <span className="tab-rec-dot" />}
+              </button>
+            </div>
+            <div className="meeting-actions">
+              {tab === 'summary' && hasSummary && (
+                <button
+                  type="button"
+                  className="secondary-btn with-icon"
+                  onClick={copySummary}
+                  title="Copy summary"
+                >
+                  <Icon name="copy" size={14} /> Copy
+                </button>
+              )}
+              {tab === 'transcript' && transcriptCount > 0 && (
+                <button
+                  type="button"
+                  className="secondary-btn with-icon"
+                  onClick={copyTranscript}
+                  title="Copy transcript"
+                >
+                  <Icon name="copy" size={14} /> Copy
+                </button>
+              )}
+              {tab === 'notes' && hasNotes && (
+                <button
+                  type="button"
+                  className="secondary-btn with-icon"
+                  onClick={copyNotes}
+                  title="Copy notes"
+                >
+                  <Icon name="copy" size={14} /> Copy
+                </button>
+              )}
+              <button
+                type="button"
+                className="secondary-btn with-icon"
+                onClick={exportMeeting}
+                title="Export meeting as markdown"
+              >
+                <Icon name="download" size={14} /> Export
+              </button>
               {generating ? (
-                <div className="generating">
-                  <div className="spinner" /> Generating meeting notes and action points…
-                </div>
-              ) : meeting.summary ? (
-                <Markdown source={meeting.summary} meetingId={id} onSourceChange={setSummary} />
+                <span className="generating-inline">
+                  <span className="spinner" /> Generating…
+                </span>
               ) : (
-                <div className="generating">No notes yet.</div>
+                canGenerate && (
+                  <button
+                    className="secondary-btn with-icon"
+                    onClick={generateNotes}
+                    title={hasSummary ? 'Regenerate summary' : 'Generate summary'}
+                  >
+                    <Icon name="sparkles" size={14} />
+                    {hasSummary ? 'Regenerate' : 'Generate'}
+                  </button>
+                )
               )}
             </div>
-          )}
+          </div>
+
+          <div className="meeting-search">
+            <input
+              type="search"
+              placeholder={
+                tab === 'summary'
+                  ? 'Search summary…'
+                  : tab === 'notes'
+                    ? 'Search notes…'
+                    : 'Search transcript…'
+              }
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+            />
+          </div>
 
           {meeting.hasRecording && !isRecording && (
             <audio
+              ref={audioRef}
               className="audio-player"
               controls
-              src={assetUrl(id, 'recording.webm') + `#${meeting.durationSec}`}
+              src={assetUrl(id, meeting.recordingFile)}
+              onTimeUpdate={(e) => setAudioTimeSec(e.currentTarget.currentTime)}
             />
           )}
 
-          <div className="timeline">
-            {meeting.timeline.length > 0 && <div className="timeline-divider">Timeline</div>}
-            {meeting.timeline.map((entry, i) => (
-              <Bubble
-                key={`${i}-${entry.timeSec}-${entry.kind}`}
-                entry={entry}
-                meetingId={id}
-                onSave={(content) => updateEntry(i, content)}
-                onDelete={() => updateEntry(i, '')}
-              />
-            ))}
-            {pendingChunks.map((pid) => (
-              <div className="bubble-row transcript" key={`pending-${pid}`}>
-                <div className="bubble bubble-pending">
-                  <div className="generating" style={{ padding: 0 }}>
-                    <div className="spinner" /> Transcribing…
-                  </div>
-                </div>
-              </div>
-            ))}
-            {meeting.timeline.length === 0 && pendingChunks.length === 0 && !isRecording && (
-              <div className="empty-state" style={{ padding: '40px 0' }}>
-                <p>
-                  Hit <strong>Start recording</strong> below — the transcript will appear here live,
-                  and you can type notes or paste screenshots at any time.
+          {importing && importProgress && (
+            <div className="transcribing-banner">
+              <span className="spinner" /> Transcribing import ({importProgress.done}/
+              {importProgress.total})…
+            </div>
+          )}
+
+          {tab === 'summary' ? (
+            <SummaryPanel
+              meetingId={id}
+              value={summaryText}
+              syncKey={summarySyncKey}
+              query={searchQuery}
+              onChange={handleSummaryChange}
+              onSaveImage={saveImageFile}
+              onTranscriptLink={goToTranscript}
+              disabled={generating}
+              editorRef={summaryEditorRef}
+              showEmptyHint={!hasSummary && !isRecording && !generating}
+            />
+          ) : tab === 'notes' ? (
+            <>
+              {searchQuery.trim() && (
+                <p className={`search-match-banner${notesSearchHaystack ? ' hit' : ''}`}>
+                  {notesSearchHaystack
+                    ? `Found "${searchQuery}" in notes`
+                    : `No matches for "${searchQuery}" in notes`}
                 </p>
-              </div>
-            )}
-          </div>
+              )}
+              <MeetingEditor
+                ref={editorRef}
+                value={docText}
+                syncKey={syncKey}
+                meetingId={id}
+                onChange={handleDocChange}
+                onSaveImage={saveImageFile}
+                disabled={generating}
+                placeholder="Your manual notes during the meeting…"
+              />
+              {!hasNotes && !isRecording && (
+                <div className="empty-state" style={{ padding: '20px 0 0' }}>
+                  <p>
+                    Jot down your own notes here during the meeting — type <strong>/</strong>{' '}
+                    for headings, lists, and tasks. Paste images directly. The AI summary lives
+                    on the <strong>Summary</strong> tab.
+                  </p>
+                </div>
+              )}
+            </>
+          ) : (
+            <TranscriptPanel
+              lines={transcriptLines}
+              query={searchQuery}
+              pendingChunks={pendingChunks}
+              isRecording={isRecording}
+              activeTimeSec={canSeek ? audioTimeSec : undefined}
+              jumpTimeSec={jumpTimeSec}
+              onSeek={canSeek ? seekAudio : undefined}
+            />
+          )}
         </div>
       </div>
 
@@ -356,12 +780,24 @@ export default function MeetingPage({
           <div className="rec-bar">
             {!isRecording ? (
               <>
-                <button className="rec-btn start" onClick={startRecording}>
-                  ● Start recording
+                <button className="rec-btn start with-icon" onClick={startRecording} disabled={importing}>
+                  <Icon name="mic" size={14} /> Start recording
+                </button>
+                <button
+                  className="secondary-btn with-icon"
+                  onClick={importAudio}
+                  disabled={importing}
+                  title="Import an audio file and transcribe it"
+                >
+                  <Icon name="upload" size={14} />
+                  {importing ? 'Importing…' : 'Import audio'}
                 </button>
                 <select
                   value={recorder.deviceId}
-                  onChange={(e) => recorder.setDeviceId(e.target.value)}
+                  onChange={(e) => {
+                    recorder.setDeviceId(e.target.value)
+                    persistMic(e.target.value)
+                  }}
                   title="Microphone"
                 >
                   {recorder.devices.map((d, i) => (
@@ -371,6 +807,17 @@ export default function MeetingPage({
                   ))}
                   {recorder.devices.length === 0 && <option value="">Default microphone</option>}
                 </select>
+                <button
+                  type="button"
+                  className="icon-btn mic-refresh"
+                  title="Refresh microphone list"
+                  onClick={() => recorder.refreshDevices()}
+                >
+                  <Icon name="refresh" size={14} />
+                </button>
+                {recorder.devices.length === 0 && (
+                  <span className="mic-hint">No mics listed — grant permission or click refresh</span>
+                )}
                 <span style={{ fontSize: 12 }}>
                   STT:{' '}
                   {settings.sttEngine === 'local'
@@ -382,112 +829,32 @@ export default function MeetingPage({
               </>
             ) : (
               <>
-                <button className="rec-btn" onClick={stopRecording}>
-                  ■ Stop
+                {recorder.paused ? (
+                  <button className="rec-btn start with-icon" onClick={recorder.resume}>
+                    <Icon name="play" size={14} /> Resume
+                  </button>
+                ) : (
+                  <button className="secondary-btn with-icon" onClick={recorder.pause}>
+                    <Icon name="pause" size={14} /> Pause
+                  </button>
+                )}
+                <button className="rec-btn with-icon" onClick={stopRecording}>
+                  <Icon name="stop" size={14} /> Stop
                 </button>
                 <span className="rec-indicator">
-                  <span className="dot rec" /> {fmtClock(recorder.elapsedSec)}
+                  <span className={`dot ${recorder.paused ? '' : 'rec'}`} />{' '}
+                  {recorder.paused ? 'Paused' : fmtClock(recorder.elapsedSec)}
                 </span>
-                <div className="level-meter">
-                  <div style={{ width: `${Math.min(100, recorder.level * 100)}%` }} />
-                </div>
+                {!recorder.paused && (
+                  <div className="level-meter">
+                    <div style={{ width: `${Math.min(100, recorder.level * 100)}%` }} />
+                  </div>
+                )}
               </>
             )}
             {sttPill}
           </div>
-
-          <div className="composer">
-            <textarea
-              rows={1}
-              placeholder="Type a note… (paste or drop images too)"
-              value={note}
-              onChange={(e) => {
-                setNote(e.target.value)
-                e.target.style.height = 'auto'
-                e.target.style.height = `${Math.min(140, e.target.scrollHeight)}px`
-              }}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault()
-                  sendNote()
-                }
-              }}
-              onPaste={handlePaste}
-            />
-            <button className="send-btn" onClick={sendNote} disabled={!note.trim()}>
-              Add note
-            </button>
-          </div>
-          <div className="composer-hint">
-            Enter to add · Shift+Enter for a new line · Markdown supported · Ctrl+V pastes screenshots
-          </div>
         </div>
-      </div>
-    </div>
-  )
-}
-
-function Bubble({
-  entry,
-  meetingId,
-  onSave,
-  onDelete
-}: {
-  entry: TimelineEntry
-  meetingId: string
-  onSave: (content: string) => void
-  onDelete: () => void
-}) {
-  const [editing, setEditing] = useState(false)
-  const [draft, setDraft] = useState(entry.content)
-
-  const commit = () => {
-    setEditing(false)
-    if (draft.trim() !== entry.content) onSave(draft)
-  }
-
-  return (
-    <div className={`bubble-row ${entry.kind}`}>
-      {editing ? (
-        <textarea
-          className="bubble-edit"
-          value={draft}
-          autoFocus
-          rows={Math.min(8, draft.split('\n').length + 1)}
-          onChange={(e) => setDraft(e.target.value)}
-          onBlur={commit}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
-              e.preventDefault()
-              commit()
-            }
-            if (e.key === 'Escape') {
-              setDraft(entry.content)
-              setEditing(false)
-            }
-          }}
-        />
-      ) : (
-        <div className="bubble">
-          <Markdown source={entry.content} meetingId={meetingId} />
-        </div>
-      )}
-      <div className="bubble-meta">
-        <span>
-          {entry.kind === 'transcript' ? 'Transcript' : entry.kind === 'note' ? 'Note' : 'Image'} ·{' '}
-          {fmtClock(entry.timeSec)}
-        </span>
-        {entry.kind !== 'image' && (
-          <button
-            onClick={() => {
-              setDraft(entry.content)
-              setEditing(true)
-            }}
-          >
-            Edit
-          </button>
-        )}
-        <button onClick={onDelete}>Delete</button>
       </div>
     </div>
   )

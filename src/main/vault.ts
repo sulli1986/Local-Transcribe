@@ -2,7 +2,8 @@ import { promises as fs, existsSync } from 'fs'
 import path from 'path'
 import matter from 'gray-matter'
 import { shell } from 'electron'
-import type { Meeting, MeetingMeta, MeetingStatus, TimelineEntry, TimelineEntryKind } from '../shared/types'
+import type { Meeting, MeetingMeta, MeetingStatus, SearchResult, TimelineEntry, TimelineEntryKind } from '../shared/types'
+import { meetingSearchText } from '../shared/document'
 
 const MEETING_FILE = 'meeting.md'
 const RECORDING_FILE = 'recording.webm'
@@ -84,7 +85,8 @@ export class Vault {
           title: String(fm.title ?? e.name),
           createdAt: String(fm.createdAt ?? new Date(0).toISOString()),
           durationSec: Number(fm.durationSec ?? 0),
-          status: (fm.status as MeetingStatus) ?? 'new'
+          status: (fm.status as MeetingStatus) ?? 'new',
+          tags: parseTags(fm.tags)
         })
       } catch {
         // Skip unreadable folders rather than failing the whole list
@@ -111,9 +113,17 @@ export class Vault {
       title: name,
       createdAt: now.toISOString(),
       durationSec: 0,
-      status: 'new'
+      status: 'new',
+      tags: []
     }
-    await this.write(folder, meta, '', [])
+    const meeting: Meeting = {
+      ...meta,
+      summary: '',
+      timeline: [],
+      recordingFile: RECORDING_FILE,
+      hasRecording: false
+    }
+    await this.write(folder, meeting, '', [])
     return meta
   }
 
@@ -121,15 +131,19 @@ export class Vault {
     const raw = await fs.readFile(this.mdPath(id), 'utf-8')
     const { data: fm, content } = matter(raw)
     const { summary, timeline } = parseBody(content)
+    const recordingFile = String(fm.recordingFile ?? RECORDING_FILE)
+    const recPath = path.join(this.dir(id), recordingFile)
     return {
       id,
       title: String(fm.title ?? id),
       createdAt: String(fm.createdAt ?? new Date(0).toISOString()),
       durationSec: Number(fm.durationSec ?? 0),
       status: (fm.status as MeetingStatus) ?? 'new',
+      tags: parseTags(fm.tags),
       summary,
       timeline,
-      hasRecording: existsSync(this.recordingPath(id))
+      recordingFile,
+      hasRecording: existsSync(recPath)
     }
   }
 
@@ -137,7 +151,7 @@ export class Vault {
     await shell.trashItem(this.dir(id))
   }
 
-  private async write(id: string, meta: MeetingMeta, summary: string, timeline: TimelineEntry[]): Promise<void> {
+  private async write(id: string, m: Meeting, summary: string, timeline: TimelineEntry[]): Promise<void> {
     const lines: string[] = []
     if (summary.trim()) {
       lines.push('## Summary', '', summary.trim(), '')
@@ -147,12 +161,15 @@ export class Vault {
       lines.push(`### [${fmtTime(t.timeSec)}] ${KIND_LABEL[t.kind]}`, '', t.content.trim(), '')
     }
     const body = lines.join('\n')
-    const md = matter.stringify(body, {
-      title: meta.title,
-      createdAt: meta.createdAt,
-      durationSec: meta.durationSec,
-      status: meta.status
-    })
+    const fm: Record<string, unknown> = {
+      title: m.title,
+      createdAt: m.createdAt,
+      durationSec: m.durationSec,
+      status: m.status
+    }
+    if (m.tags && m.tags.length > 0) fm.tags = m.tags
+    if (m.recordingFile && m.recordingFile !== RECORDING_FILE) fm.recordingFile = m.recordingFile
+    const md = matter.stringify(body, fm)
     await fs.writeFile(this.mdPath(id), md, 'utf-8')
   }
 
@@ -164,6 +181,29 @@ export class Vault {
     await fn(m)
     await this.write(id, m, m.summary, m.timeline)
     return m
+  }
+
+  async setTags(id: string, tags: string[]): Promise<Meeting> {
+    return this.mutate(id, (m) => {
+      m.tags = tags.map((t) => t.trim()).filter(Boolean).slice(0, 12)
+    })
+  }
+
+  async importRecording(id: string, srcPath: string): Promise<Meeting> {
+    const ext = path.extname(srcPath).replace(/^\./, '').toLowerCase() || 'audio'
+    const dest = ext === 'webm' ? RECORDING_FILE : `recording.${ext.replace(/[^a-z0-9]/gi, '')}`
+    const data = await fs.readFile(srcPath)
+    await this.clearAllRecordings(id)
+    await fs.writeFile(path.join(this.dir(id), dest), data)
+    return this.mutate(id, (m) => {
+      m.recordingFile = dest
+      m.timeline = m.timeline.filter((e) => e.kind !== 'transcript')
+      m.status = 'new'
+    })
+  }
+
+  meetingMdPath(id: string): string {
+    return this.mdPath(id)
   }
 
   async setTitle(id: string, title: string): Promise<Meeting> {
@@ -204,26 +244,87 @@ export class Vault {
     })
   }
 
-  async saveImage(id: string, data: Uint8Array, ext: string, timeSec: number): Promise<Meeting> {
+  async setBody(id: string, summary: string, timeline: TimelineEntry[]): Promise<Meeting> {
+    return this.mutate(id, (m) => {
+      m.summary = summary
+      m.timeline = timeline
+    })
+  }
+
+  async saveImageAsset(id: string, data: Uint8Array, ext: string): Promise<string> {
     const safeExt = ext.replace(/[^a-z0-9]/gi, '').toLowerCase() || 'png'
     const file = `img-${Date.now()}.${safeExt}`
     const assetsDir = path.join(this.dir(id), ASSETS_DIR)
     await fs.mkdir(assetsDir, { recursive: true })
     await fs.writeFile(path.join(assetsDir, file), data)
+    return `${ASSETS_DIR}/${file}`
+  }
+
+  async saveImage(id: string, data: Uint8Array, ext: string, timeSec: number): Promise<Meeting> {
+    const rel = await this.saveImageAsset(id, data, ext)
     return this.appendEntry(id, {
       kind: 'image',
       timeSec,
-      content: `![image](${ASSETS_DIR}/${file})`
+      content: `![image](${rel})`
+    })
+  }
+
+  async startRecording(id: string): Promise<void> {
+    await this.clearAllRecordings(id)
+    await this.mutate(id, (m) => {
+      m.recordingFile = RECORDING_FILE
     })
   }
 
   async appendRecordingChunk(id: string, chunk: Uint8Array): Promise<void> {
-    await fs.appendFile(this.recordingPath(id), chunk)
+    const m = await this.getMeeting(id)
+    const file = m.recordingFile || RECORDING_FILE
+    await fs.appendFile(path.join(this.dir(id), file), chunk)
   }
 
   async clearRecording(id: string): Promise<void> {
     if (existsSync(this.recordingPath(id))) await fs.rm(this.recordingPath(id))
   }
+
+  private async clearAllRecordings(id: string): Promise<void> {
+    const dir = this.dir(id)
+    const entries = await fs.readdir(dir)
+    for (const name of entries) {
+      if (name === RECORDING_FILE || name.startsWith('recording.')) {
+        await fs.rm(path.join(dir, name))
+      }
+    }
+  }
+
+  async searchMeetings(query: string): Promise<SearchResult[]> {
+    const q = query.trim().toLowerCase()
+    if (!q) return []
+    const metas = await this.listMeetings()
+    const results: SearchResult[] = []
+    for (const meta of metas) {
+      try {
+        const m = await this.getMeeting(meta.id)
+        const tags = m.tags ?? []
+        const haystack = `${m.title}\n${tags.join(' ')}\n${meetingSearchText(m)}`.toLowerCase()
+        const idx = haystack.indexOf(q)
+        if (idx < 0) continue
+        results.push({
+          id: meta.id,
+          title: meta.title,
+          createdAt: meta.createdAt,
+          snippet: makeSnippet(`${m.title}\n${tags.join(' ')}\n${meetingSearchText(m)}`, q)
+        })
+      } catch {
+        // skip unreadable meetings
+      }
+    }
+    return results
+  }
+}
+
+function parseTags(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return []
+  return raw.map(String).map((t) => t.trim()).filter(Boolean)
 }
 
 function parseBody(content: string): { summary: string; timeline: TimelineEntry[] } {
@@ -249,4 +350,15 @@ function parseBody(content: string): { summary: string; timeline: TimelineEntry[
     })
   }
   return { summary, timeline }
+}
+
+function makeSnippet(text: string, query: string, radius = 60): string {
+  const lower = text.toLowerCase()
+  const idx = lower.indexOf(query.toLowerCase())
+  if (idx < 0) return text.slice(0, radius * 2).trim()
+  const start = Math.max(0, idx - radius)
+  const end = Math.min(text.length, idx + query.length + radius)
+  const prefix = start > 0 ? '…' : ''
+  const suffix = end < text.length ? '…' : ''
+  return prefix + text.slice(start, end).replace(/\s+/g, ' ').trim() + suffix
 }

@@ -35,9 +35,21 @@ const api = {
     ipcRenderer.invoke('vault:deleteEntry', id, index),
   setSummary: (id: string, summary: string): Promise<Meeting> =>
     ipcRenderer.invoke('vault:setSummary', id, summary),
+  setBody: (id: string, summary: string, timeline: TimelineEntry[]): Promise<Meeting> =>
+    ipcRenderer.invoke('vault:setBody', id, summary, timeline),
+  saveImageAsset: (id: string, data: Uint8Array, ext: string): Promise<string> =>
+    ipcRenderer.invoke('vault:saveImageAsset', id, data, ext),
   saveImage: (id: string, data: Uint8Array, ext: string, timeSec: number): Promise<Meeting> =>
     ipcRenderer.invoke('vault:saveImage', id, data, ext, timeSec),
   openFolder: (id: string): Promise<void> => ipcRenderer.invoke('vault:openFolder', id),
+  searchMeetings: (query: string): Promise<import('../shared/types').SearchResult[]> =>
+    ipcRenderer.invoke('vault:search', query),
+  setTags: (id: string, tags: string[]): Promise<Meeting> =>
+    ipcRenderer.invoke('vault:setTags', id, tags),
+  pickImportAudio: (id: string): Promise<Meeting | null> =>
+    ipcRenderer.invoke('vault:pickImportAudio', id),
+  exportMeeting: (id: string): Promise<string | null> =>
+    ipcRenderer.invoke('vault:exportMeeting', id),
 
   // Recording
   startRecordingFile: (id: string): Promise<void> => ipcRenderer.invoke('rec:start', id),

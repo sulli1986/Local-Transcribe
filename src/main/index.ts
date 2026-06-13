@@ -131,15 +131,50 @@ function registerIpc(): void {
   ipcMain.handle('vault:setSummary', (_e, id: string, summary: string) =>
     vault.setSummary(id, summary)
   )
+  ipcMain.handle('vault:setBody', (_e, id: string, summary: string, timeline: import('../shared/types').TimelineEntry[]) =>
+    vault.setBody(id, summary, timeline)
+  )
+  ipcMain.handle('vault:saveImageAsset', (_e, id: string, data: Uint8Array, ext: string) =>
+    vault.saveImageAsset(id, data, ext)
+  )
   ipcMain.handle('vault:saveImage', (_e, id: string, data: Uint8Array, ext: string, timeSec: number) =>
     vault.saveImage(id, data, ext, timeSec)
   )
   ipcMain.handle('vault:openFolder', (_e, id: string) =>
     shell.openPath(vault.assetPath(id, '.'))
   )
+  ipcMain.handle('vault:search', (_e, query: string) => vault.searchMeetings(query))
+  ipcMain.handle('vault:setTags', (_e, id: string, tags: string[]) => vault.setTags(id, tags))
+  ipcMain.handle('vault:pickImportAudio', async (_e, id: string) => {
+    const res = await dialog.showOpenDialog(mainWindow!, {
+      title: 'Import audio file',
+      properties: ['openFile'],
+      filters: [
+        {
+          name: 'Audio',
+          extensions: ['webm', 'wav', 'mp3', 'm4a', 'ogg', 'flac', 'aac']
+        }
+      ]
+    })
+    if (res.canceled || !res.filePaths[0]) return null
+    return vault.importRecording(id, res.filePaths[0])
+  })
+  ipcMain.handle('vault:exportMeeting', async (_e, id: string) => {
+    const m = await vault.getMeeting(id)
+    const safe = m.title.replace(/[/\\:*?"<>|]/g, '').trim() || 'meeting'
+    const res = await dialog.showSaveDialog(mainWindow!, {
+      title: 'Export meeting notes',
+      defaultPath: `${safe}.md`,
+      filters: [{ name: 'Markdown', extensions: ['md'] }]
+    })
+    if (res.canceled || !res.filePath) return null
+    const { promises: fs } = await import('fs')
+    await fs.copyFile(vault.meetingMdPath(id), res.filePath)
+    return res.filePath
+  })
 
   // --- Recording ---
-  ipcMain.handle('rec:start', (_e, id: string) => vault.clearRecording(id))
+  ipcMain.handle('rec:start', (_e, id: string) => vault.startRecording(id))
   ipcMain.handle('rec:chunk', (_e, id: string, chunk: Uint8Array) =>
     vault.appendRecordingChunk(id, chunk)
   )

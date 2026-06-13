@@ -2,11 +2,15 @@ import { useState } from 'react'
 import type {
   ApiKeyProvider,
   AppSettings,
+  DotColorsSettings,
   LlmProvider,
   SttEngine,
+  TagCategory,
   ThemePref,
   WhisperModel
 } from '../../../shared/types'
+import { DEFAULT_DOT_COLORS } from '../../../shared/colors'
+import Icon from './Icons'
 import { useToast } from '../toast'
 
 interface Props {
@@ -38,10 +42,121 @@ export default function SettingsPage({ settings, onChange }: Props) {
     if (picked) onChange(await window.api.getSettings())
   }
 
+  const dotColors = settings.dotColors ?? DEFAULT_DOT_COLORS
+  const tagCategories = settings.tagCategories ?? []
+
+  const updateDotColor = (key: keyof DotColorsSettings, color: string) => {
+    void update({ dotColors: { ...dotColors, [key]: color } })
+  }
+
+  const updateCategory = (index: number, patch: Partial<TagCategory>) => {
+    const next = tagCategories.map((c, i) => (i === index ? { ...c, ...patch } : c))
+    void update({ tagCategories: next })
+  }
+
+  const addCategory = () => {
+    void update({
+      tagCategories: [...tagCategories, { name: 'New category', color: '#2383e2' }]
+    })
+  }
+
+  const removeCategory = (index: number) => {
+    void update({ tagCategories: tagCategories.filter((_, i) => i !== index) })
+  }
+
   return (
     <div className="settings-page">
       <div className="settings-inner">
-        <h1>Settings</h1>
+        <h1 className="settings-title">
+          <Icon name="settings" size={22} /> Settings
+        </h1>
+
+        <div className="settings-section">
+          <h3><Icon name="tag" size={16} /> Categories &amp; colors</h3>
+          <p className="hint" style={{ marginTop: 0 }}>
+            Status dots appear in the sidebar. Tag categories color-code meeting tags — use the
+            same name when tagging a meeting.
+          </p>
+
+          <div className="color-grid">
+            <label className="color-field">
+              <span className="color-field-label">
+                <span className="dot new preview-dot" /> New
+              </span>
+              <input
+                type="color"
+                value={dotColors.new}
+                onChange={(e) => updateDotColor('new', e.target.value)}
+              />
+            </label>
+            <label className="color-field">
+              <span className="color-field-label">
+                <span className="dot recorded preview-dot" /> Recorded
+              </span>
+              <input
+                type="color"
+                value={dotColors.recorded}
+                onChange={(e) => updateDotColor('recorded', e.target.value)}
+              />
+            </label>
+            <label className="color-field">
+              <span className="color-field-label">
+                <span className="dot summarized preview-dot" /> Summarized
+              </span>
+              <input
+                type="color"
+                value={dotColors.summarized}
+                onChange={(e) => updateDotColor('summarized', e.target.value)}
+              />
+            </label>
+            <label className="color-field">
+              <span className="color-field-label">
+                <span className="dot rec preview-dot" /> Recording
+              </span>
+              <input
+                type="color"
+                value={dotColors.rec}
+                onChange={(e) => updateDotColor('rec', e.target.value)}
+              />
+            </label>
+          </div>
+
+          <div className="field" style={{ marginTop: 16 }}>
+            <label>Tag categories</label>
+            {tagCategories.length === 0 && (
+              <p className="hint">No categories yet — tags still get automatic colors.</p>
+            )}
+            <div className="category-list">
+              {tagCategories.map((cat, i) => (
+                <div className="category-row" key={`${cat.name}-${i}`}>
+                  <span className="tag-dot" style={{ background: cat.color }} />
+                  <input
+                    value={cat.name}
+                    onChange={(e) => updateCategory(i, { name: e.target.value })}
+                    placeholder="Category name"
+                  />
+                  <input
+                    type="color"
+                    value={cat.color}
+                    onChange={(e) => updateCategory(i, { color: e.target.value })}
+                    title="Category color"
+                  />
+                  <button
+                    type="button"
+                    className="icon-btn"
+                    onClick={() => removeCategory(i)}
+                    title="Remove category"
+                  >
+                    <Icon name="trash" size={14} />
+                  </button>
+                </div>
+              ))}
+            </div>
+            <button type="button" className="secondary-btn with-icon" onClick={addCategory}>
+              <Icon name="plus" size={14} /> Add category
+            </button>
+          </div>
+        </div>
 
         <div className="settings-section">
           <h3>Appearance</h3>
@@ -181,8 +296,9 @@ export default function SettingsPage({ settings, onChange }: Props) {
                 onChange={(e) => update({ openrouterModel: e.target.value })}
               />
               <span className="hint">
-                Any chat model on openrouter.ai, e.g. openai/gpt-4o-mini or
-                anthropic/claude-3.5-haiku
+                Current default: google/gemini-2.5-flash — good speed/quality for most meetings.
+                For very long, dense meetings (60+ min), try google/gemini-2.5-pro or
+                anthropic/claude-sonnet-4.
               </span>
             </div>
           )}
@@ -205,6 +321,19 @@ export default function SettingsPage({ settings, onChange }: Props) {
               </div>
             </>
           )}
+          <div className="field checkbox-field">
+            <label className="checkbox-label">
+              <input
+                type="checkbox"
+                checked={settings.autoGenerateNotes}
+                onChange={(e) => update({ autoGenerateNotes: e.target.checked })}
+              />
+              Generate AI summary automatically when recording stops or audio is imported
+            </label>
+            <span className="hint">
+              When off, use &ldquo;Generate summary&rdquo; on the Summary tab manually.
+            </span>
+          </div>
         </div>
 
         <div className="settings-section">

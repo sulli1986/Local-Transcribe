@@ -2,6 +2,8 @@
 
 A local-first meeting transcriber for Linux and Windows. It records meetings from any microphone, shows the transcript live while you talk, lets you take chat-style notes and paste screenshots during the meeting, and generates AI meeting notes with action points when the recording stops.
 
+> **Note:** This project was built almost entirely with AI assistance (Cursor, etc.). Expect some rough edges, redundant code, or other “AI slop” — it’s a personal tool I use day to day, not a polished commercial product. Issues and PRs welcome, but no promises on roadmap or support.
+
 Every meeting is just a folder of plain files — no database:
 
 ```

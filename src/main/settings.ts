@@ -2,6 +2,7 @@ import { app, safeStorage } from 'electron'
 import { promises as fs, existsSync, readFileSync } from 'fs'
 import path from 'path'
 import type { ApiKeyProvider, AppSettings } from '../shared/types'
+import { DEFAULT_DOT_COLORS } from '../shared/colors'
 
 interface StoredSettings extends AppSettings {
   // API keys, encrypted with safeStorage when available (base64), else plain text
@@ -19,10 +20,14 @@ const defaults = (): StoredSettings => ({
   llmProvider: 'openai',
   openaiModel: 'gpt-4o-mini',
   anthropicModel: 'claude-3-5-haiku-latest',
-  openrouterModel: 'openai/gpt-4o-mini',
+  openrouterModel: 'google/gemini-2.5-flash',
   openrouterSttModel: 'openai/whisper-1',
   ollamaModel: 'llama3.1',
-  ollamaUrl: 'http://localhost:11434'
+  ollamaUrl: 'http://localhost:11434',
+  autoGenerateNotes: true,
+  preferredMicId: '',
+  dotColors: { ...DEFAULT_DOT_COLORS },
+  tagCategories: []
 })
 
 export class SettingsStore {
@@ -34,7 +39,10 @@ export class SettingsStore {
     this.data = defaults()
     if (existsSync(this.file)) {
       try {
-        this.data = { ...defaults(), ...JSON.parse(readFileSync(this.file, 'utf-8')) }
+        const parsed = JSON.parse(readFileSync(this.file, 'utf-8')) as Partial<StoredSettings>
+        this.data = { ...defaults(), ...parsed }
+        this.data.dotColors = { ...defaults().dotColors, ...parsed.dotColors }
+        this.data.tagCategories = parsed.tagCategories ?? []
       } catch {
         // Corrupt settings file: fall back to defaults
       }

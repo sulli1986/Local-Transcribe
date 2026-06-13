@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { AppSettings, MeetingMeta } from '../../shared/types'
+import { DEFAULT_DOT_COLORS } from '../../shared/colors'
 import Sidebar from './components/Sidebar'
 import MeetingPage from './components/MeetingPage'
 import SettingsPage from './components/SettingsPage'
+import Icon from './components/Icons'
 import { ToastContext, useToastState } from './toast'
 
 type View = { kind: 'meeting'; id: string } | { kind: 'settings' } | { kind: 'empty' }
@@ -36,6 +38,18 @@ export default function App() {
     return () => mql.removeEventListener('change', apply)
   }, [settings])
 
+  // Custom status dot colors
+  useEffect(() => {
+    if (!settings) return
+    const dots = settings.dotColors ?? DEFAULT_DOT_COLORS
+    const root = document.documentElement.style
+    root.setProperty('--dot-new', dots.new)
+    root.setProperty('--dot-recorded', dots.recorded)
+    root.setProperty('--dot-summarized', dots.summarized)
+    root.setProperty('--dot-rec', dots.rec)
+    root.setProperty('--rec', dots.rec)
+  }, [settings])
+
   const createMeeting = useCallback(async () => {
     const meta = await window.api.createMeeting()
     await refreshMeetings()
@@ -65,6 +79,7 @@ export default function App() {
           activeId={view.kind === 'meeting' ? view.id : null}
           recordingId={recordingId}
           settingsActive={view.kind === 'settings'}
+          tagCategories={settings.tagCategories ?? []}
           onSelect={(id) => setView({ kind: 'meeting', id })}
           onNew={createMeeting}
           onSettings={() => setView({ kind: 'settings' })}
@@ -86,10 +101,11 @@ export default function App() {
           )}
           {view.kind === 'empty' && (
             <div className="empty-state">
+              <Icon name="logo" size={40} className="empty-icon" />
               <h2>Local Transcribe</h2>
               <p>Record a meeting, watch it transcribe live, and get AI notes when you stop.</p>
-              <button className="primary-btn" onClick={createMeeting}>
-                + New meeting
+              <button className="primary-btn with-icon" onClick={createMeeting}>
+                <Icon name="plus" size={16} /> New meeting
               </button>
             </div>
           )}

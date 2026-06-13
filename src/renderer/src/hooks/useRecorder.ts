@@ -7,14 +7,22 @@ export interface RecorderCallbacks {
   onRecordingChunk: (data: Uint8Array) => void | Promise<void>
 }
 
+export interface RecorderOptions {
+  preferredMicId?: string
+}
+
 export interface RecorderHandle {
   recording: boolean
+  paused: boolean
   elapsedSec: number
   level: number
   devices: MediaDeviceInfo[]
   deviceId: string
   setDeviceId: (id: string) => void
+  refreshDevices: () => Promise<void>
   start: () => Promise<void>
+  pause: () => void
+  resume: () => void
   stop: () => Promise<number>
 }
 
@@ -25,12 +33,16 @@ const MAX_CHUNK_SEC = 20
 const MIN_CHUNK_SEC = 0.6
 const PREROLL_BLOCKS = 3 // ~0.75s of audio kept before speech onset
 
-export function useRecorder(callbacks: RecorderCallbacks): RecorderHandle {
+export function useRecorder(
+  callbacks: RecorderCallbacks,
+  options: RecorderOptions = {}
+): RecorderHandle {
   const [recording, setRecording] = useState(false)
+  const [paused, setPaused] = useState(false)
   const [elapsedSec, setElapsedSec] = useState(0)
   const [level, setLevel] = useState(0)
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([])
-  const [deviceId, setDeviceId] = useState('')
+  const [deviceId, setDeviceId] = useState(options.preferredMicId ?? '')
 
   const cb = useRef(callbacks)
   cb.current = callbacks
@@ -41,21 +53,26 @@ export function useRecorder(callbacks: RecorderCallbacks): RecorderHandle {
   const processorRef = useRef<ScriptProcessorNode | null>(null)
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const startTimeRef = useRef(0)
+  const pausedRef = useRef(false)
+  const totalPausedMsRef = useRef(0)
+  const pauseStartedRef = useRef(0)
 
   const refreshDevices = useCallback(async () => {
     try {
       const list = await navigator.mediaDevices.enumerateDevices()
       const mics = list.filter((d) => d.kind === 'audioinput')
       setDevices(mics)
-      setDeviceId((cur) => (cur && mics.some((d) => d.deviceId === cur) ? cur : (mics[0]?.deviceId ?? '')))
+      setDeviceId((cur) => {
+        const preferred = options.preferredMicId
+        if (preferred && mics.some((d) => d.deviceId === preferred)) return preferred
+        return cur && mics.some((d) => d.deviceId === cur) ? cur : (mics[0]?.deviceId ?? '')
+      })
     } catch {
       // ignore
     }
-  }, [])
+  }, [options.preferredMicId])
 
   useEffect(() => {
-    // Browsers only expose the full device list (and labels) after mic
-    // permission has been exercised once, so prime it with a momentary capture.
     let cancelled = false
     ;(async () => {
       try {
@@ -73,11 +90,19 @@ export function useRecorder(callbacks: RecorderCallbacks): RecorderHandle {
     }
   }, [refreshDevices])
 
+  useEffect(() => {
+    if (options.preferredMicId) {
+      setDeviceId((cur) => cur || options.preferredMicId!)
+    }
+  }, [options.preferredMicId])
+
+  const elapsedMs = () =>
+    Date.now() - startTimeRef.current - totalPausedMsRef.current - (pausedRef.current ? Date.now() - pauseStartedRef.current : 0)
+
   const start = useCallback(async () => {
     if (recording) return
     const stream = await navigator.mediaDevices.getUserMedia({
       audio: {
-        // "ideal" falls back to the default mic if the saved device is gone
         deviceId: deviceId ? { ideal: deviceId } : undefined,
         echoCancellation: true,
         noiseSuppression: true,
@@ -85,10 +110,8 @@ export function useRecorder(callbacks: RecorderCallbacks): RecorderHandle {
       }
     })
     streamRef.current = stream
-    // Device labels only become available after permission is granted
     refreshDevices()
 
-    // 1. Compressed recording to disk
     const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
       ? 'audio/webm;codecs=opus'
       : 'audio/webm'
@@ -102,7 +125,6 @@ export function useRecorder(callbacks: RecorderCallbacks): RecorderHandle {
     recorder.start(3000)
     recorderRef.current = recorder
 
-    // 2. PCM tap for live transcription with simple energy-based VAD
     const ctx = new AudioContext({ sampleRate: SAMPLE_RATE })
     ctxRef.current = ctx
     const source = ctx.createMediaStreamSource(stream)
@@ -134,6 +156,8 @@ export function useRecorder(callbacks: RecorderCallbacks): RecorderHandle {
     }
 
     processor.onaudioprocess = (e) => {
+      if (pausedRef.current) return
+
       const input = e.inputBuffer.getChannelData(0)
       const block = new Float32Array(input)
       let sum = 0
@@ -141,7 +165,7 @@ export function useRecorder(callbacks: RecorderCallbacks): RecorderHandle {
       const rms = Math.sqrt(sum / block.length)
       setLevel((prev) => Math.max(rms * 6, prev * 0.82))
 
-      const nowSec = (Date.now() - startTimeRef.current) / 1000
+      const nowSec = elapsedMs() / 1000
 
       if (rms > SPEECH_THRESHOLD) {
         if (!active) {
@@ -164,27 +188,47 @@ export function useRecorder(callbacks: RecorderCallbacks): RecorderHandle {
     }
 
     source.connect(processor)
-    // ScriptProcessor needs to be connected to keep firing; route to a muted gain
     const sink = ctx.createGain()
     sink.gain.value = 0
     processor.connect(sink)
     sink.connect(ctx.destination)
 
     startTimeRef.current = Date.now()
+    totalPausedMsRef.current = 0
+    pausedRef.current = false
+    setPaused(false)
     setElapsedSec(0)
     setRecording(true)
     timerRef.current = setInterval(() => {
-      setElapsedSec(Math.floor((Date.now() - startTimeRef.current) / 1000))
+      setElapsedSec(Math.floor(elapsedMs() / 1000))
     }, 500)
 
-    // Stash so stop() can flush the trailing chunk
     ;(processor as unknown as { __finalize: () => void }).__finalize = () => {
       if (active) finalizeChunk()
     }
   }, [recording, deviceId, refreshDevices])
 
+  const pause = useCallback(() => {
+    if (!recording || pausedRef.current) return
+    pausedRef.current = true
+    pauseStartedRef.current = Date.now()
+    setPaused(true)
+    setLevel(0)
+    const recorder = recorderRef.current
+    if (recorder?.state === 'recording') recorder.pause()
+  }, [recording])
+
+  const resume = useCallback(() => {
+    if (!recording || !pausedRef.current) return
+    totalPausedMsRef.current += Date.now() - pauseStartedRef.current
+    pausedRef.current = false
+    setPaused(false)
+    const recorder = recorderRef.current
+    if (recorder?.state === 'paused') recorder.resume()
+  }, [recording])
+
   const stop = useCallback(async (): Promise<number> => {
-    const duration = Math.round((Date.now() - startTimeRef.current) / 1000)
+    const duration = Math.round(elapsedMs() / 1000)
     if (timerRef.current) clearInterval(timerRef.current)
 
     const processor = processorRef.current
@@ -200,7 +244,6 @@ export function useRecorder(callbacks: RecorderCallbacks): RecorderHandle {
         recorder.onstop = () => resolve()
         recorder.stop()
       })
-      // ondataavailable fires before onstop; give the final chunk handler a tick
       await new Promise((r) => setTimeout(r, 50))
     }
     recorderRef.current = null
@@ -210,12 +253,28 @@ export function useRecorder(callbacks: RecorderCallbacks): RecorderHandle {
     await ctxRef.current?.close().catch(() => {})
     ctxRef.current = null
 
+    pausedRef.current = false
+    totalPausedMsRef.current = 0
     setRecording(false)
+    setPaused(false)
     setLevel(0)
     return duration
   }, [])
 
-  return { recording, elapsedSec, level, devices, deviceId, setDeviceId, start, stop }
+  return {
+    recording,
+    paused,
+    elapsedSec,
+    level,
+    devices,
+    deviceId,
+    setDeviceId,
+    refreshDevices,
+    start,
+    pause,
+    resume,
+    stop
+  }
 }
 
 export function fmtClock(totalSec: number): string {
