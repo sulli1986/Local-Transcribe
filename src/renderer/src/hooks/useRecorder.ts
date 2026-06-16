@@ -1,4 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import type { RecordingMode } from '../../../shared/types'
+import {
+  captureSystemAudio,
+  createMixedAudioGraph,
+  type MixedAudioGraph
+} from '../utils/mixAudioStreams'
 
 export interface RecorderCallbacks {
   /** A VAD-cut chunk of speech, mono 16 kHz PCM, with its start offset in seconds. */
@@ -9,6 +15,9 @@ export interface RecorderCallbacks {
 
 export interface RecorderOptions {
   preferredMicId?: string
+  recordingMode?: RecordingMode
+  micGain?: number
+  systemAudioGain?: number
 }
 
 export interface RecorderHandle {
@@ -46,9 +55,13 @@ export function useRecorder(
 
   const cb = useRef(callbacks)
   cb.current = callbacks
+  const optionsRef = useRef(options)
+  optionsRef.current = options
 
   const ctxRef = useRef<AudioContext | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
+  const displayStreamRef = useRef<MediaStream | null>(null)
+  const mixedGraphRef = useRef<MixedAudioGraph | null>(null)
   const recorderRef = useRef<MediaRecorder | null>(null)
   const processorRef = useRef<ScriptProcessorNode | null>(null)
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -63,14 +76,14 @@ export function useRecorder(
       const mics = list.filter((d) => d.kind === 'audioinput')
       setDevices(mics)
       setDeviceId((cur) => {
-        const preferred = options.preferredMicId
+        const preferred = optionsRef.current.preferredMicId
         if (preferred && mics.some((d) => d.deviceId === preferred)) return preferred
         return cur && mics.some((d) => d.deviceId === cur) ? cur : (mics[0]?.deviceId ?? '')
       })
     } catch {
       // ignore
     }
-  }, [options.preferredMicId])
+  }, [])
 
   useEffect(() => {
     let cancelled = false
@@ -97,116 +110,163 @@ export function useRecorder(
   }, [options.preferredMicId])
 
   const elapsedMs = () =>
-    Date.now() - startTimeRef.current - totalPausedMsRef.current - (pausedRef.current ? Date.now() - pauseStartedRef.current : 0)
+    Date.now() -
+    startTimeRef.current -
+    totalPausedMsRef.current -
+    (pausedRef.current ? Date.now() - pauseStartedRef.current : 0)
+
+  const releaseCapture = useCallback(async () => {
+    mixedGraphRef.current?.cleanup()
+    mixedGraphRef.current = null
+    displayStreamRef.current?.getTracks().forEach((t) => t.stop())
+    displayStreamRef.current = null
+    streamRef.current?.getTracks().forEach((t) => t.stop())
+    streamRef.current = null
+    await ctxRef.current?.close().catch(() => {})
+    ctxRef.current = null
+  }, [])
 
   const start = useCallback(async () => {
     if (recording) return
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        deviceId: deviceId ? { ideal: deviceId } : undefined,
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true
-      }
-    })
-    streamRef.current = stream
-    refreshDevices()
 
-    const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-      ? 'audio/webm;codecs=opus'
-      : 'audio/webm'
-    const recorder = new MediaRecorder(stream, { mimeType })
-    recorder.ondataavailable = async (e) => {
-      if (e.data.size > 0) {
-        const buf = new Uint8Array(await e.data.arrayBuffer())
-        await cb.current.onRecordingChunk(buf)
-      }
-    }
-    recorder.start(3000)
-    recorderRef.current = recorder
+    const { recordingMode = 'mic', micGain = 1, systemAudioGain = 1 } = optionsRef.current
+    const useSystem = recordingMode === 'mic_and_system'
 
-    const ctx = new AudioContext({ sampleRate: SAMPLE_RATE })
-    ctxRef.current = ctx
-    const source = ctx.createMediaStreamSource(stream)
-    const processor = ctx.createScriptProcessor(4096, 1, 1)
-    processorRef.current = processor
+    let micStream: MediaStream | null = null
+    let displayStream: MediaStream | null = null
+    let mixedGraph: MixedAudioGraph | null = null
+    let ctx: AudioContext | null = null
+    let recordingStream: MediaStream
 
-    let active = false
-    let chunkBlocks: Float32Array[] = []
-    let preroll: Float32Array[] = []
-    let silenceMs = 0
-    let chunkStartSec = 0
-    const blockMs = (4096 / ctx.sampleRate) * 1000
-
-    const finalizeChunk = () => {
-      const totalLen = chunkBlocks.reduce((n, b) => n + b.length, 0)
-      const durSec = totalLen / SAMPLE_RATE
-      if (durSec >= MIN_CHUNK_SEC) {
-        const audio = new Float32Array(totalLen)
-        let off = 0
-        for (const b of chunkBlocks) {
-          audio.set(b, off)
-          off += b.length
-        }
-        cb.current.onSpeechChunk(audio, chunkStartSec)
-      }
-      chunkBlocks = []
-      active = false
-      silenceMs = 0
+    const audioConstraints: MediaTrackConstraints = {
+      deviceId: deviceId ? { ideal: deviceId } : undefined,
+      echoCancellation: !useSystem,
+      noiseSuppression: !useSystem,
+      autoGainControl: !useSystem
     }
 
-    processor.onaudioprocess = (e) => {
-      if (pausedRef.current) return
+    try {
+      if (useSystem) {
+        displayStream = await captureSystemAudio()
+        displayStreamRef.current = displayStream
+        micStream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints })
+        streamRef.current = micStream
+        mixedGraph = createMixedAudioGraph(micStream, displayStream, micGain, systemAudioGain)
+        mixedGraphRef.current = mixedGraph
+        ctx = mixedGraph.ctx
+        ctxRef.current = ctx
+        recordingStream = mixedGraph.outputStream
+      } else {
+        micStream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints })
+        streamRef.current = micStream
+        recordingStream = micStream
+        ctx = new AudioContext({ sampleRate: SAMPLE_RATE })
+        ctxRef.current = ctx
+      }
 
-      const input = e.inputBuffer.getChannelData(0)
-      const block = new Float32Array(input)
-      let sum = 0
-      for (let i = 0; i < block.length; i++) sum += block[i] * block[i]
-      const rms = Math.sqrt(sum / block.length)
-      setLevel((prev) => Math.max(rms * 6, prev * 0.82))
+      refreshDevices()
 
-      const nowSec = elapsedMs() / 1000
-
-      if (rms > SPEECH_THRESHOLD) {
-        if (!active) {
-          active = true
-          chunkBlocks = [...preroll]
-          chunkStartSec = Math.max(0, nowSec - (preroll.length * blockMs) / 1000)
+      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+        ? 'audio/webm;codecs=opus'
+        : 'audio/webm'
+      const recorder = new MediaRecorder(recordingStream, { mimeType })
+      recorder.ondataavailable = async (e) => {
+        if (e.data.size > 0) {
+          const buf = new Uint8Array(await e.data.arrayBuffer())
+          await cb.current.onRecordingChunk(buf)
         }
+      }
+      recorder.start(3000)
+      recorderRef.current = recorder
+
+      const processor = ctx.createScriptProcessor(4096, 1, 1)
+      processorRef.current = processor
+
+      let active = false
+      let chunkBlocks: Float32Array[] = []
+      let preroll: Float32Array[] = []
+      let silenceMs = 0
+      let chunkStartSec = 0
+      const blockMs = (4096 / ctx.sampleRate) * 1000
+
+      const finalizeChunk = () => {
+        const totalLen = chunkBlocks.reduce((n, b) => n + b.length, 0)
+        const durSec = totalLen / SAMPLE_RATE
+        if (durSec >= MIN_CHUNK_SEC) {
+          const audio = new Float32Array(totalLen)
+          let off = 0
+          for (const b of chunkBlocks) {
+            audio.set(b, off)
+            off += b.length
+          }
+          cb.current.onSpeechChunk(audio, chunkStartSec)
+        }
+        chunkBlocks = []
+        active = false
         silenceMs = 0
-        chunkBlocks.push(block)
-      } else if (active) {
-        silenceMs += blockMs
-        chunkBlocks.push(block)
-        if (silenceMs >= SILENCE_CUT_MS) finalizeChunk()
       }
 
-      preroll.push(block)
-      if (preroll.length > PREROLL_BLOCKS) preroll.shift()
+      processor.onaudioprocess = (e) => {
+        if (pausedRef.current) return
 
-      if (active && chunkBlocks.length * blockMs >= MAX_CHUNK_SEC * 1000) finalizeChunk()
+        const input = e.inputBuffer.getChannelData(0)
+        const block = new Float32Array(input)
+        let sum = 0
+        for (let i = 0; i < block.length; i++) sum += block[i] * block[i]
+        const rms = Math.sqrt(sum / block.length)
+        setLevel((prev) => Math.max(rms * 6, prev * 0.82))
+
+        const nowSec = elapsedMs() / 1000
+
+        if (rms > SPEECH_THRESHOLD) {
+          if (!active) {
+            active = true
+            chunkBlocks = [...preroll]
+            chunkStartSec = Math.max(0, nowSec - (preroll.length * blockMs) / 1000)
+          }
+          silenceMs = 0
+          chunkBlocks.push(block)
+        } else if (active) {
+          silenceMs += blockMs
+          chunkBlocks.push(block)
+          if (silenceMs >= SILENCE_CUT_MS) finalizeChunk()
+        }
+
+        preroll.push(block)
+        if (preroll.length > PREROLL_BLOCKS) preroll.shift()
+
+        if (active && chunkBlocks.length * blockMs >= MAX_CHUNK_SEC * 1000) finalizeChunk()
+      }
+
+      if (mixedGraph) {
+        mixedGraph.connectProcessor(processor)
+      } else {
+        const source = ctx.createMediaStreamSource(recordingStream)
+        source.connect(processor)
+        const sink = ctx.createGain()
+        sink.gain.value = 0
+        processor.connect(sink)
+        sink.connect(ctx.destination)
+      }
+
+      startTimeRef.current = Date.now()
+      totalPausedMsRef.current = 0
+      pausedRef.current = false
+      setPaused(false)
+      setElapsedSec(0)
+      setRecording(true)
+      timerRef.current = setInterval(() => {
+        setElapsedSec(Math.floor(elapsedMs() / 1000))
+      }, 500)
+
+      ;(processor as unknown as { __finalize: () => void }).__finalize = () => {
+        if (active) finalizeChunk()
+      }
+    } catch (err) {
+      await releaseCapture()
+      throw err
     }
-
-    source.connect(processor)
-    const sink = ctx.createGain()
-    sink.gain.value = 0
-    processor.connect(sink)
-    sink.connect(ctx.destination)
-
-    startTimeRef.current = Date.now()
-    totalPausedMsRef.current = 0
-    pausedRef.current = false
-    setPaused(false)
-    setElapsedSec(0)
-    setRecording(true)
-    timerRef.current = setInterval(() => {
-      setElapsedSec(Math.floor(elapsedMs() / 1000))
-    }, 500)
-
-    ;(processor as unknown as { __finalize: () => void }).__finalize = () => {
-      if (active) finalizeChunk()
-    }
-  }, [recording, deviceId, refreshDevices])
+  }, [recording, deviceId, refreshDevices, releaseCapture])
 
   const pause = useCallback(() => {
     if (!recording || pausedRef.current) return
@@ -248,10 +308,7 @@ export function useRecorder(
     }
     recorderRef.current = null
 
-    streamRef.current?.getTracks().forEach((t) => t.stop())
-    streamRef.current = null
-    await ctxRef.current?.close().catch(() => {})
-    ctxRef.current = null
+    await releaseCapture()
 
     pausedRef.current = false
     totalPausedMsRef.current = 0
@@ -259,7 +316,7 @@ export function useRecorder(
     setPaused(false)
     setLevel(0)
     return duration
-  }, [])
+  }, [releaseCapture])
 
   return {
     recording,

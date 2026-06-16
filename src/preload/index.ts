@@ -51,6 +51,8 @@ const api = {
   startRecordingFile: (id: string): Promise<void> => ipcRenderer.invoke('rec:start', id),
   appendRecordingChunk: (id: string, chunk: Uint8Array): Promise<void> =>
     ipcRenderer.invoke('rec:chunk', id, chunk),
+  isSystemAudioSupported: (): Promise<{ supported: boolean }> =>
+    ipcRenderer.invoke('recording:isSystemAudioSupported'),
 
   // STT
   prepareStt: (): Promise<void> => ipcRenderer.invoke('stt:prepare'),

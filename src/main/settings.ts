@@ -26,6 +26,9 @@ const defaults = (): StoredSettings => ({
   ollamaUrl: 'http://localhost:11434',
   autoGenerateNotes: true,
   preferredMicId: '',
+  recordingMode: 'mic',
+  micGain: 1,
+  systemAudioGain: 1,
   dotColors: { ...DEFAULT_DOT_COLORS },
   tagCategories: [],
   actionColumns: DEFAULT_ACTION_COLUMNS.map((c) => ({ ...c }))

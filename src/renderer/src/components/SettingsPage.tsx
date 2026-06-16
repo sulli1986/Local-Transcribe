@@ -1,10 +1,11 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type {
   ApiKeyProvider,
   AppSettings,
   ActionColumn,
   DotColorsSettings,
   LlmProvider,
+  RecordingMode,
   SttEngine,
   TagCategory,
   ThemePref,
@@ -21,6 +22,7 @@ interface Props {
 
 export default function SettingsPage({ settings, onChange }: Props) {
   const toast = useToast()
+  const [systemAudioSupported, setSystemAudioSupported] = useState(false)
   const [keys, setKeys] = useState<Record<ApiKeyProvider, string>>({
     openai: '',
     anthropic: '',
@@ -30,6 +32,10 @@ export default function SettingsPage({ settings, onChange }: Props) {
   const update = async (patch: Partial<AppSettings>) => {
     onChange(await window.api.updateSettings(patch))
   }
+
+  useEffect(() => {
+    window.api.isSystemAudioSupported().then(({ supported }) => setSystemAudioSupported(supported))
+  }, [])
 
   const saveKey = async (provider: ApiKeyProvider, key: string) => {
     await window.api.setApiKey(provider, key.trim())
@@ -279,6 +285,67 @@ export default function SettingsPage({ settings, onChange }: Props) {
               </select>
               <span className="hint">Downloaded automatically on first use, then cached offline.</span>
             </div>
+          )}
+        </div>
+
+        <div className="settings-section">
+          <h3>Recording</h3>
+          <div className="field">
+            <label>Recording source</label>
+            <div className="seg-control">
+              {(
+                [
+                  ['mic', 'Mic only'],
+                  ['mic_and_system', 'Mic + system audio (Windows)']
+                ] as [RecordingMode, string][]
+              ).map(([v, label]) => (
+                <button
+                  key={v}
+                  type="button"
+                  className={settings.recordingMode === v ? 'active' : ''}
+                  disabled={v === 'mic_and_system' && !systemAudioSupported}
+                  title={
+                    v === 'mic_and_system' && !systemAudioSupported
+                      ? 'System audio capture coming later on this platform'
+                      : undefined
+                  }
+                  onClick={() => update({ recordingMode: v })}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <span className="hint">
+              Mic + system audio captures remote call audio via the Windows share picker. Use
+              headphones to avoid echo. When recording starts, pick your Teams window or entire
+              screen and enable <strong>Share system audio</strong>.
+            </span>
+          </div>
+          {settings.recordingMode === 'mic_and_system' && systemAudioSupported && (
+            <>
+              <div className="field">
+                <label>Microphone level ({Math.round((settings.micGain ?? 1) * 100)}%)</label>
+                <input
+                  type="range"
+                  min={0}
+                  max={200}
+                  value={Math.round((settings.micGain ?? 1) * 100)}
+                  onChange={(e) => update({ micGain: Number(e.target.value) / 100 })}
+                />
+              </div>
+              <div className="field">
+                <label>
+                  System audio level ({Math.round((settings.systemAudioGain ?? 1) * 100)}%)
+                </label>
+                <input
+                  type="range"
+                  min={0}
+                  max={200}
+                  value={Math.round((settings.systemAudioGain ?? 1) * 100)}
+                  onChange={(e) => update({ systemAudioGain: Number(e.target.value) / 100 })}
+                />
+              </div>
+            </>
           )}
         </div>
 

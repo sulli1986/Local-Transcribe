@@ -995,6 +995,32 @@ html[data-theme='dark'] .search-hit {
   color: var(--danger);
 }
 
+.recording-mode-pill {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: 10px;
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.recording-mode-pill.system {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.recording-mode-hint {
+  font-size: 11px;
+  color: var(--text-faint);
+  white-space: nowrap;
+  flex-shrink: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .drop-overlay {
   position: absolute;
   inset: 0;

@@ -32,6 +32,7 @@ export type WhisperModel = 'tiny' | 'base' | 'small'
 export type LlmProvider = 'openai' | 'anthropic' | 'openrouter' | 'ollama'
 export type ThemePref = 'light' | 'dark' | 'system'
 export type ApiKeyProvider = 'openai' | 'anthropic' | 'openrouter'
+export type RecordingMode = 'mic' | 'mic_and_system'
 
 export interface DotColorsSettings {
   new: string
@@ -95,6 +96,11 @@ export interface AppSettings {
   autoGenerateNotes: boolean
   /** Last selected microphone deviceId (browser media device id). */
   preferredMicId: string
+  /** Mic only, or mic + system loopback (Windows). */
+  recordingMode: RecordingMode
+  /** Input gain when mixing mic + system (0–2). */
+  micGain: number
+  systemAudioGain: number
   /** Sidebar status dot colors. */
   dotColors: DotColorsSettings
   /** Named tag categories — tags matching a name use that color. */

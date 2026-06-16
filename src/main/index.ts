@@ -69,11 +69,17 @@ app.whenReady().then(() => {
   // needed: the check handler gates enumerateDevices() labels, the request
   // handler gates getUserMedia().
   session.defaultSession.setPermissionRequestHandler((_wc, permission, cb) => {
-    cb(permission === 'media')
+    cb(permission === 'media' || (permission as string) === 'display-capture')
   })
   session.defaultSession.setPermissionCheckHandler((_wc, permission) => {
-    return permission === 'media'
+    return permission === 'media' || (permission as string) === 'display-capture'
   })
+
+  if (process.platform === 'win32') {
+    session.defaultSession.setDisplayMediaRequestHandler((_request, callback) => {
+      callback({})
+    }, { useSystemPicker: true })
+  }
 
   stt.onStatus((status) => {
     mainWindow?.webContents.send('stt:status', status)
@@ -171,6 +177,9 @@ function registerIpc(): void {
   ipcMain.handle('rec:chunk', (_e, id: string, chunk: Uint8Array) =>
     vault.appendRecordingChunk(id, chunk)
   )
+  ipcMain.handle('recording:isSystemAudioSupported', () => ({
+    supported: process.platform === 'win32'
+  }))
 
   // --- STT ---
   ipcMain.handle('stt:prepare', () => stt.prepare())

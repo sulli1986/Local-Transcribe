@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { AppSettings, Meeting, SttStatus } from '../../../shared/types'
+import type { AppSettings, Meeting, RecordingMode, SttStatus } from '../../../shared/types'
 import {
   formatTranscriptPlain,
   getTranscriptLines,
@@ -72,6 +72,7 @@ export default function MeetingPage({
   const [tagDraft, setTagDraft] = useState('')
   const [audioTimeSec, setAudioTimeSec] = useState<number | undefined>()
   const [jumpTimeSec, setJumpTimeSec] = useState<number | undefined>()
+  const [systemAudioSupported, setSystemAudioSupported] = useState(false)
 
   const queueRef = useRef(Promise.resolve())
   const pidRef = useRef(1)
@@ -115,6 +116,17 @@ export default function MeetingPage({
   useEffect(() => {
     return window.api.onSttStatus(setSttStatus)
   }, [])
+
+  useEffect(() => {
+    window.api.isSystemAudioSupported().then(({ supported }) => setSystemAudioSupported(supported))
+  }, [])
+
+  const effectiveRecordingMode: RecordingMode = useMemo(() => {
+    if (settings.recordingMode === 'mic_and_system' && systemAudioSupported) {
+      return 'mic_and_system'
+    }
+    return 'mic'
+  }, [settings.recordingMode, systemAudioSupported])
 
   const saveDocument = useCallback(
     async (text: string) => {
@@ -213,7 +225,12 @@ export default function MeetingPage({
       },
       onRecordingChunk: (data) => window.api.appendRecordingChunk(id, data)
     },
-    { preferredMicId: settings.preferredMicId }
+    {
+      preferredMicId: settings.preferredMicId,
+      recordingMode: effectiveRecordingMode,
+      micGain: settings.micGain ?? 1,
+      systemAudioGain: settings.systemAudioGain ?? 1
+    }
   )
 
   const startRecording = useCallback(async () => {
@@ -221,18 +238,30 @@ export default function MeetingPage({
       toast.show('Another meeting is already recording', true)
       return
     }
+    if (settings.recordingMode === 'mic_and_system' && !systemAudioSupported) {
+      toast.show('System audio capture is not available on this platform — using microphone only')
+    }
     try {
+      await recorder.start()
       await window.api.startRecordingFile(id)
       window.api.prepareStt().catch((err) => {
         toast.show(`Speech model failed to load: ${err.message ?? err}`, true)
       })
-      await recorder.start()
       setRecordingId(id)
       setTab('transcript')
     } catch (err) {
-      toast.show(`Could not start recording: ${err instanceof Error ? err.message : err}`, true)
+      await recorder.stop().catch(() => {})
+      const name = err instanceof DOMException ? err.name : ''
+      const message = err instanceof Error ? err.message : String(err)
+      if (name === 'NotAllowedError' || name === 'AbortError') {
+        toast.show('System audio capture cancelled', true)
+      } else if (message === 'NO_SYSTEM_AUDIO') {
+        toast.show('No system audio track — check Share audio in the picker', true)
+      } else {
+        toast.show(`Could not start recording: ${message}`, true)
+      }
     }
-  }, [id, recordingId, recorder, setRecordingId, toast])
+  }, [id, recordingId, recorder, setRecordingId, toast, settings.recordingMode, systemAudioSupported])
 
   const generateNotes = useCallback(async () => {
     setGenerating(true)
@@ -824,6 +853,21 @@ export default function MeetingPage({
                 </button>
                 {recorder.devices.length === 0 && (
                   <span className="mic-hint">No mics listed — grant permission or click refresh</span>
+                )}
+                <span
+                  className={`recording-mode-pill${effectiveRecordingMode === 'mic_and_system' ? ' system' : ''}`}
+                  title={
+                    systemAudioSupported
+                      ? undefined
+                      : 'System audio capture coming later on this platform'
+                  }
+                >
+                  {effectiveRecordingMode === 'mic_and_system' ? 'Mic + system' : 'Mic only'}
+                </span>
+                {effectiveRecordingMode === 'mic_and_system' && (
+                  <span className="recording-mode-hint">
+                    Select Teams or Entire screen + Share audio
+                  </span>
                 )}
                 <span style={{ fontSize: 12 }}>
                   STT:{' '}
