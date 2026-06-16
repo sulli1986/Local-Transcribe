@@ -2,7 +2,7 @@ import { app, safeStorage } from 'electron'
 import { promises as fs, existsSync, readFileSync } from 'fs'
 import path from 'path'
 import type { ApiKeyProvider, AppSettings } from '../shared/types'
-import { DEFAULT_DOT_COLORS } from '../shared/colors'
+import { DEFAULT_DOT_COLORS, DEFAULT_ACTION_COLUMNS } from '../shared/colors'
 
 interface StoredSettings extends AppSettings {
   // API keys, encrypted with safeStorage when available (base64), else plain text
@@ -27,7 +27,8 @@ const defaults = (): StoredSettings => ({
   autoGenerateNotes: true,
   preferredMicId: '',
   dotColors: { ...DEFAULT_DOT_COLORS },
-  tagCategories: []
+  tagCategories: [],
+  actionColumns: DEFAULT_ACTION_COLUMNS.map((c) => ({ ...c }))
 })
 
 export class SettingsStore {
@@ -43,6 +44,10 @@ export class SettingsStore {
         this.data = { ...defaults(), ...parsed }
         this.data.dotColors = { ...defaults().dotColors, ...parsed.dotColors }
         this.data.tagCategories = parsed.tagCategories ?? []
+        this.data.actionColumns =
+          parsed.actionColumns?.length === 3
+            ? parsed.actionColumns
+            : defaults().actionColumns
       } catch {
         // Corrupt settings file: fall back to defaults
       }

@@ -6,7 +6,9 @@ import type {
   MeetingMeta,
   MeetingStatus,
   SttStatus,
-  TimelineEntry
+  TimelineEntry,
+  ActionItem,
+  StoredActionItem
 } from '../shared/types'
 
 const api = {
@@ -61,7 +63,19 @@ const api = {
   },
 
   // AI notes
-  generateNotes: (id: string): Promise<Meeting> => ipcRenderer.invoke('notes:generate', id)
+  generateNotes: (id: string): Promise<Meeting> => ipcRenderer.invoke('notes:generate', id),
+
+  // Action items
+  listActionItems: (): Promise<ActionItem[]> => ipcRenderer.invoke('actions:list'),
+  countOpenActionItems: (): Promise<number> => ipcRenderer.invoke('actions:countOpen'),
+  updateActionItem: (meetingId: string, item: StoredActionItem): Promise<ActionItem> =>
+    ipcRenderer.invoke('actions:update', meetingId, item),
+  createActionItem: (
+    meetingId: string,
+    partial: Pick<StoredActionItem, 'text'> & Partial<StoredActionItem>
+  ): Promise<ActionItem> => ipcRenderer.invoke('actions:create', meetingId, partial),
+  deleteActionItem: (meetingId: string, itemId: string): Promise<void> =>
+    ipcRenderer.invoke('actions:delete', meetingId, itemId)
 }
 
 export type Api = typeof api

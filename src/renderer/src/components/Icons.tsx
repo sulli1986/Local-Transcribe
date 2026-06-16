@@ -18,6 +18,7 @@ type IconName =
   | 'stop'
   | 'upload'
   | 'logo'
+  | 'checklist'
 
 const PATHS: Record<IconName, string> = {
   logo: 'M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z M19 10v2a7 7 0 0 1-14 0v-2 M12 19v3',
@@ -39,7 +40,8 @@ const PATHS: Record<IconName, string> = {
   pause: 'M10 5h2v14h-2zM14 5h2v14h-2z',
   play: 'M8 5v14l11-7z',
   stop: 'M6 6h12v12H6z',
-  upload: 'M12 3v12M7 10l5 5 5-5M5 21h14'
+  upload: 'M12 3v12M7 10l5 5 5-5M5 21h14',
+  checklist: 'M9 11l3 3L22 4M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11'
 }
 
 interface Props {

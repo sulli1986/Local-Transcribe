@@ -185,6 +185,27 @@ function registerIpc(): void {
   ipcMain.handle('notes:generate', async (_e, id: string) => {
     const meeting = await vault.getMeeting(id)
     const summary = await generateNotes(settings, meeting)
-    return vault.setSummary(id, summary, true)
+    await vault.setSummary(id, summary, true)
+    await vault.importActionItemsFromSummary(id)
+    return vault.getMeeting(id)
   })
+
+  // --- Action items ---
+  ipcMain.handle('actions:list', () => vault.listAllActionItems())
+  ipcMain.handle('actions:countOpen', () => vault.countOpenActionItems())
+  ipcMain.handle('actions:update', (_e, meetingId: string, item: import('../shared/types').StoredActionItem) =>
+    vault.updateActionItem(meetingId, item)
+  )
+  ipcMain.handle(
+    'actions:create',
+    (
+      _e,
+      meetingId: string,
+      partial: Pick<import('../shared/types').StoredActionItem, 'text'> &
+        Partial<import('../shared/types').StoredActionItem>
+    ) => vault.createActionItem(meetingId, partial)
+  )
+  ipcMain.handle('actions:delete', (_e, meetingId: string, itemId: string) =>
+    vault.deleteActionItem(meetingId, itemId)
+  )
 }

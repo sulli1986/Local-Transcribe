@@ -22,6 +22,7 @@ interface Props {
   settings: AppSettings
   recordingId: string | null
   setRecordingId: (id: string | null) => void
+  initialJumpTimeSec?: number
   onMetaChanged: () => void
   onDelete: () => void
 }
@@ -47,6 +48,7 @@ export default function MeetingPage({
   settings,
   recordingId,
   setRecordingId,
+  initialJumpTimeSec,
   onMetaChanged,
   onDelete
 }: Props) {
@@ -420,6 +422,11 @@ export default function MeetingPage({
     },
     [seekToTime]
   )
+
+  useEffect(() => {
+    if (initialJumpTimeSec === undefined) return
+    goToTranscript(initialJumpTimeSec)
+  }, [id, initialJumpTimeSec, goToTranscript])
 
   const copyTranscript = useCallback(async () => {
     if (!meeting) return

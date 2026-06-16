@@ -45,6 +45,40 @@ export interface TagCategory {
   color: string
 }
 
+export type ActionStatus = 'todo' | 'in_progress' | 'done'
+
+export interface ActionColumn {
+  id: ActionStatus
+  label: string
+  color: string
+}
+
+/** Stored per meeting in actions.json; meetingId/title filled when aggregating. */
+export interface StoredActionItem {
+  id: string
+  text: string
+  owner?: string
+  status: ActionStatus
+  done: boolean
+  notes: string
+  transcriptSec?: number
+  createdAt: string
+  updatedAt: string
+  source: 'ai' | 'manual'
+}
+
+/** Action item with meeting context for the global Actions page. */
+export interface ActionItem extends StoredActionItem {
+  meetingId: string
+  meetingTitle: string
+  meetingTags?: string[]
+}
+
+export interface ActionsFile {
+  version: 1
+  items: StoredActionItem[]
+}
+
 export interface AppSettings {
   vaultPath: string
   theme: ThemePref
@@ -65,6 +99,8 @@ export interface AppSettings {
   dotColors: DotColorsSettings
   /** Named tag categories — tags matching a name use that color. */
   tagCategories: TagCategory[]
+  /** Kanban column labels and colors for action items. */
+  actionColumns: ActionColumn[]
   /** Which API keys are currently stored (values never leave the main process). */
   hasOpenaiKey?: boolean
   hasAnthropicKey?: boolean

@@ -6,10 +6,13 @@ import Icon from './Icons'
 interface Props {
   meetings: MeetingMeta[]
   activeId: string | null
+  actionsActive: boolean
+  openActionCount: number
   recordingId: string | null
   settingsActive: boolean
   tagCategories: TagCategory[]
   onSelect: (id: string) => void
+  onActions: () => void
   onNew: () => void
   onSettings: () => void
 }
@@ -54,10 +57,13 @@ function HighlightSnippet({ text, query }: { text: string; query: string }) {
 export default function Sidebar({
   meetings,
   activeId,
+  actionsActive,
+  openActionCount,
   recordingId,
   settingsActive,
   tagCategories,
   onSelect,
+  onActions,
   onNew,
   onSettings
 }: Props) {
@@ -143,6 +149,15 @@ export default function Sidebar({
       <button className="new-meeting-btn" onClick={onNew}>
         <Icon name="plus" size={16} /> New meeting
       </button>
+      <button
+        type="button"
+        className={`sidebar-nav-btn${actionsActive ? ' active' : ''}`}
+        onClick={onActions}
+      >
+        <Icon name="checklist" size={16} />
+        Actions
+        {openActionCount > 0 && <span className="sidebar-action-badge">{openActionCount}</span>}
+      </button>
       <div className="meeting-list">
         {isSearching && !searching && searchResults.length === 0 && (
           <div className="meeting-group-label">No matches in any meeting</div>
@@ -153,7 +168,7 @@ export default function Sidebar({
             {g.items.map((m) => (
               <div
                 key={m.id}
-                className={`meeting-item${m.id === activeId && !settingsActive ? ' active' : ''}`}
+                className={`meeting-item${m.id === activeId && !settingsActive && !actionsActive ? ' active' : ''}`}
                 onClick={() => onSelect(m.id)}
               >
                 <span className={`dot ${dotClass(m)}`} />

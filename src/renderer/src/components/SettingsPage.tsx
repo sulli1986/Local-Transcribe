@@ -2,6 +2,7 @@ import { useState } from 'react'
 import type {
   ApiKeyProvider,
   AppSettings,
+  ActionColumn,
   DotColorsSettings,
   LlmProvider,
   SttEngine,
@@ -9,7 +10,7 @@ import type {
   ThemePref,
   WhisperModel
 } from '../../../shared/types'
-import { DEFAULT_DOT_COLORS } from '../../../shared/colors'
+import { DEFAULT_DOT_COLORS, DEFAULT_ACTION_COLUMNS } from '../../../shared/colors'
 import Icon from './Icons'
 import { useToast } from '../toast'
 
@@ -44,6 +45,7 @@ export default function SettingsPage({ settings, onChange }: Props) {
 
   const dotColors = settings.dotColors ?? DEFAULT_DOT_COLORS
   const tagCategories = settings.tagCategories ?? []
+  const actionColumns = settings.actionColumns ?? DEFAULT_ACTION_COLUMNS
 
   const updateDotColor = (key: keyof DotColorsSettings, color: string) => {
     void update({ dotColors: { ...dotColors, [key]: color } })
@@ -62,6 +64,11 @@ export default function SettingsPage({ settings, onChange }: Props) {
 
   const removeCategory = (index: number) => {
     void update({ tagCategories: tagCategories.filter((_, i) => i !== index) })
+  }
+
+  const updateActionColumn = (index: number, patch: Partial<ActionColumn>) => {
+    const next = actionColumns.map((c, i) => (i === index ? { ...c, ...patch } : c))
+    void update({ actionColumns: next })
   }
 
   return (
@@ -155,6 +162,34 @@ export default function SettingsPage({ settings, onChange }: Props) {
             <button type="button" className="secondary-btn with-icon" onClick={addCategory}>
               <Icon name="plus" size={14} /> Add category
             </button>
+          </div>
+
+          <div className="field" style={{ marginTop: 20 }}>
+            <label>Action board columns</label>
+            <p className="hint" style={{ marginTop: 0 }}>
+              Kanban column labels and colors on the Actions page.
+            </p>
+            <div className="category-list">
+              {actionColumns.map((col, i) => (
+                <div className="category-row" key={col.id}>
+                  <span className="tag-dot" style={{ background: col.color }} />
+                  <input
+                    value={col.label}
+                    onChange={(e) => updateActionColumn(i, { label: e.target.value })}
+                    placeholder="Column label"
+                  />
+                  <input
+                    type="color"
+                    value={col.color}
+                    onChange={(e) => updateActionColumn(i, { color: e.target.value })}
+                    title="Column color"
+                  />
+                  <span className="hint" style={{ fontSize: 11, minWidth: 72 }}>
+                    {col.id.replace('_', ' ')}
+                  </span>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
 

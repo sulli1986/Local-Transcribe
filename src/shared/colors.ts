@@ -1,4 +1,4 @@
-import type { DotColorsSettings, TagCategory } from './types'
+import type { DotColorsSettings, TagCategory, ActionColumn } from './types'
 
 export const DEFAULT_DOT_COLORS: DotColorsSettings = {
   new: '#9b9a97',
@@ -46,3 +46,9 @@ export function tagStylePlain(tag: string, categories: TagCategory[]): TagStyle 
     borderColor: `${color}44`
   }
 }
+
+export const DEFAULT_ACTION_COLUMNS: ActionColumn[] = [
+  { id: 'todo', label: 'To do', color: '#787774' },
+  { id: 'in_progress', label: 'In progress', color: '#2383e2' },
+  { id: 'done', label: 'Done', color: '#3fb950' }
+]

@@ -2,10 +2,17 @@ import { promises as fs, existsSync } from 'fs'
 import path from 'path'
 import matter from 'gray-matter'
 import { shell } from 'electron'
-import type { Meeting, MeetingMeta, MeetingStatus, SearchResult, TimelineEntry, TimelineEntryKind } from '../shared/types'
+import type { Meeting, MeetingMeta, MeetingStatus, SearchResult, TimelineEntry, TimelineEntryKind, ActionItem, StoredActionItem, ActionsFile } from '../shared/types'
 import { meetingSearchText } from '../shared/document'
+import {
+  mergeImportedItems,
+  parseActionItemsFromSummary,
+  syncSummaryActionSection,
+  doneFromStatus
+} from '../shared/actions'
 
 const MEETING_FILE = 'meeting.md'
+const ACTIONS_FILE = 'actions.json'
 const RECORDING_FILE = 'recording.webm'
 const ASSETS_DIR = 'assets'
 
@@ -55,6 +62,10 @@ export class Vault {
 
   private mdPath(id: string): string {
     return path.join(this.dir(id), MEETING_FILE)
+  }
+
+  private actionsPath(id: string): string {
+    return path.join(this.dir(id), ACTIONS_FILE)
   }
 
   recordingPath(id: string): string {
@@ -294,6 +305,142 @@ export class Vault {
       }
     }
     return results
+  }
+
+  private async readActionsFile(id: string): Promise<StoredActionItem[]> {
+    const p = this.actionsPath(id)
+    if (!existsSync(p)) return []
+    try {
+      const raw = JSON.parse(await fs.readFile(p, 'utf-8')) as ActionsFile
+      if (raw.version !== 1 || !Array.isArray(raw.items)) return []
+      return raw.items
+    } catch {
+      return []
+    }
+  }
+
+  private async writeActionsFile(id: string, items: StoredActionItem[]): Promise<void> {
+    const file: ActionsFile = { version: 1, items }
+    await fs.writeFile(this.actionsPath(id), JSON.stringify(file, null, 2), 'utf-8')
+  }
+
+  /** Lazy-migrate from summary checkboxes if actions.json is missing. */
+  private async ensureActionItems(id: string, meeting?: Meeting): Promise<StoredActionItem[]> {
+    let items = await this.readActionsFile(id)
+    if (items.length > 0) return items
+
+    const m = meeting ?? (await this.getMeeting(id))
+    if (!m.summary.trim()) return []
+
+    items = parseActionItemsFromSummary(m.summary, 'ai')
+    if (items.length > 0) await this.writeActionsFile(id, items)
+    return items
+  }
+
+  private async syncSummaryFromActions(id: string, items: StoredActionItem[]): Promise<void> {
+    const m = await this.getMeeting(id)
+    const summary = syncSummaryActionSection(m.summary, items)
+    await this.mutate(id, (meeting) => {
+      meeting.summary = summary
+    })
+  }
+
+  async getActionItems(id: string): Promise<StoredActionItem[]> {
+    return this.ensureActionItems(id)
+  }
+
+  async importActionItemsFromSummary(id: string): Promise<StoredActionItem[]> {
+    const m = await this.getMeeting(id)
+    const imported = parseActionItemsFromSummary(m.summary, 'ai')
+    const existing = await this.readActionsFile(id)
+    const merged =
+      existing.length > 0 ? mergeImportedItems(existing, imported) : imported
+    await this.writeActionsFile(id, merged)
+    return merged
+  }
+
+  async listAllActionItems(): Promise<ActionItem[]> {
+    const metas = await this.listMeetings()
+    const all: ActionItem[] = []
+    for (const meta of metas) {
+      try {
+        const m = await this.getMeeting(meta.id)
+        const items = await this.ensureActionItems(meta.id, m)
+        for (const item of items) {
+          all.push({
+            ...item,
+            meetingId: meta.id,
+            meetingTitle: m.title,
+            meetingTags: m.tags ?? []
+          })
+        }
+      } catch {
+        // skip unreadable meetings
+      }
+    }
+    return all
+  }
+
+  async updateActionItem(id: string, item: StoredActionItem): Promise<ActionItem> {
+    const items = await this.ensureActionItems(id)
+    const idx = items.findIndex((i) => i.id === item.id)
+    if (idx < 0) throw new Error('Action item not found')
+
+    const updated: StoredActionItem = {
+      ...item,
+      done: doneFromStatus(item.status),
+      status: item.done && item.status !== 'done' ? 'done' : item.status,
+      updatedAt: new Date().toISOString()
+    }
+    if (updated.done) updated.status = 'done'
+
+    items[idx] = updated
+    await this.writeActionsFile(id, items)
+    await this.syncSummaryFromActions(id, items)
+
+    const m = await this.getMeeting(id)
+    return { ...updated, meetingId: id, meetingTitle: m.title, meetingTags: m.tags ?? [] }
+  }
+
+  async createActionItem(
+    id: string,
+    partial: Pick<StoredActionItem, 'text'> & Partial<StoredActionItem>
+  ): Promise<ActionItem> {
+    const ts = new Date().toISOString()
+    const item: StoredActionItem = {
+      id: partial.id ?? `${Date.now()}-${Math.random().toString(36).slice(2, 11)}`,
+      text: partial.text,
+      owner: partial.owner,
+      status: partial.status ?? 'todo',
+      done: partial.done ?? false,
+      notes: partial.notes ?? '',
+      transcriptSec: partial.transcriptSec,
+      createdAt: ts,
+      updatedAt: ts,
+      source: partial.source ?? 'manual'
+    }
+    if (item.done) item.status = 'done'
+
+    const items = await this.ensureActionItems(id)
+    items.push(item)
+    await this.writeActionsFile(id, items)
+    await this.syncSummaryFromActions(id, items)
+
+    const m = await this.getMeeting(id)
+    return { ...item, meetingId: id, meetingTitle: m.title, meetingTags: m.tags ?? [] }
+  }
+
+  async deleteActionItem(id: string, itemId: string): Promise<void> {
+    const items = await this.ensureActionItems(id)
+    const next = items.filter((i) => i.id !== itemId)
+    if (next.length === items.length) throw new Error('Action item not found')
+    await this.writeActionsFile(id, next)
+    await this.syncSummaryFromActions(id, next)
+  }
+
+  async countOpenActionItems(): Promise<number> {
+    const all = await this.listAllActionItems()
+    return all.filter((i) => !i.done && i.status !== 'done').length
   }
 }
 
