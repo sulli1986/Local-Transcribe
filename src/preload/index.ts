@@ -53,6 +53,9 @@ const api = {
     ipcRenderer.invoke('rec:chunk', id, chunk),
   isSystemAudioSupported: (): Promise<{ supported: boolean }> =>
     ipcRenderer.invoke('recording:isSystemAudioSupported'),
+  enableLoopbackAudio: (): Promise<void> => ipcRenderer.invoke('recording:enableLoopback'),
+  enableLoopbackPicker: (): Promise<void> => ipcRenderer.invoke('recording:enableLoopbackPicker'),
+  disableLoopbackAudio: (): Promise<void> => ipcRenderer.invoke('recording:disableLoopback'),
 
   // STT
   prepareStt: (): Promise<void> => ipcRenderer.invoke('stt:prepare'),

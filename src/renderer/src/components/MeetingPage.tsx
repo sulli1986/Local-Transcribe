@@ -254,9 +254,15 @@ export default function MeetingPage({
       const name = err instanceof DOMException ? err.name : ''
       const message = err instanceof Error ? err.message : String(err)
       if (name === 'NotAllowedError' || name === 'AbortError') {
-        toast.show('System audio capture cancelled', true)
+        toast.show(
+          'System audio capture cancelled — pick Entire screen and enable Share system audio, or allow screen recording in Windows Settings',
+          true
+        )
       } else if (message === 'NO_SYSTEM_AUDIO') {
-        toast.show('No system audio track — check Share audio in the picker', true)
+        toast.show(
+          'No system audio track — update graphics/audio drivers or use Import audio after the call',
+          true
+        )
       } else {
         toast.show(`Could not start recording: ${message}`, true)
       }
@@ -866,7 +872,7 @@ export default function MeetingPage({
                 </span>
                 {effectiveRecordingMode === 'mic_and_system' && (
                   <span className="recording-mode-hint">
-                    Select Teams or Entire screen + Share audio
+                    Captures all system audio (calls, apps, etc.)
                   </span>
                 )}
                 <span style={{ fontSize: 12 }}>

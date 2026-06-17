@@ -20,7 +20,7 @@ Every meeting is a folder of plain files — no database:
 
 ### Recording & transcription
 - Live transcription while recording (local Whisper on CPU, fully offline — or OpenAI / OpenRouter cloud STT)
-- **Mic only** (all platforms) or **Mic + system audio** (Windows) — capture both your microphone and remote call audio from Teams, Zoom, etc. via the Windows share picker
+- **Mic only** (all platforms) or **Mic + system audio** (Windows) — capture your microphone plus all system audio (Teams, Zoom, browser, etc.) via automatic loopback
 - Pause / resume recording
 - Import an existing audio file and transcribe it
 - Voice-activity chunking (~20 s max) in a worker thread so the UI stays responsive
@@ -95,13 +95,12 @@ nix-shell -p appimage-run --run 'appimage-run "release/Local Transcribe-0.1.0.Ap
 
 ## Recording Teams / remote call audio (Windows)
 
-Use **Settings → Recording → Mic + system audio (Windows)** to transcribe both sides of a call — your mic and what you hear from speakers or headphones.
+Use **Settings → Recording → Mic + system audio (Windows)** to transcribe both sides of a call — your mic and everything playing on the PC (remote voices, videos, notifications, etc.).
 
 1. Join the call (headphones strongly recommended to avoid echo).
 2. In Local Transcribe, set **Recording source** to **Mic + system audio**.
-3. Click **Start recording** — the Windows share picker appears each time.
-4. Choose **Microsoft Teams** (or the app window) or **Entire screen**, and check **Share system audio** / **Include audio**.
-5. Speak as usual; remote voices appear in the same transcript.
+3. Click **Start recording** — system audio is captured automatically via loopback (no share picker).
+4. Speak as usual; remote voices appear in the same transcript.
 
 Adjust **Microphone level** and **System audio level** in Settings if one side is too loud or quiet.
 

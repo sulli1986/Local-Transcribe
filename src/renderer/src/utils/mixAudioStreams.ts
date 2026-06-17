@@ -69,8 +69,7 @@ export function audioOnlyFromDisplayStream(displayStream: MediaStream): MediaStr
   return displayStream
 }
 
-/** Request system audio via Windows share picker. Returns audio-only stream. */
-export async function captureSystemAudio(): Promise<MediaStream> {
+async function requestSystemAudioStream(): Promise<MediaStream> {
   const displayStream = await navigator.mediaDevices.getDisplayMedia({
     video: true,
     audio: true
@@ -81,4 +80,27 @@ export async function captureSystemAudio(): Promise<MediaStream> {
     throw new Error('NO_SYSTEM_AUDIO')
   }
   return audioOnly
+}
+
+function isCaptureDenied(err: unknown): boolean {
+  return (
+    err instanceof DOMException && (err.name === 'NotAllowedError' || err.name === 'AbortError')
+  )
+}
+
+/** Request system-wide loopback audio (Windows). Returns audio-only stream. */
+export async function captureSystemAudio(): Promise<MediaStream> {
+  await window.api.enableLoopbackAudio()
+  try {
+    try {
+      return await requestSystemAudioStream()
+    } catch (err) {
+      if (!isCaptureDenied(err)) throw err
+      // Auto loopback failed (often missing screen-recording permission) — try Windows picker.
+      await window.api.enableLoopbackPicker()
+      return await requestSystemAudioStream()
+    }
+  } finally {
+    await window.api.disableLoopbackAudio()
+  }
 }

@@ -316,9 +316,8 @@ export default function SettingsPage({ settings, onChange }: Props) {
               ))}
             </div>
             <span className="hint">
-              Mic + system audio captures remote call audio via the Windows share picker. Use
-              headphones to avoid echo. When recording starts, pick your Teams window or entire
-              screen and enable <strong>Share system audio</strong>.
+              Mic + system audio automatically captures everything playing on your PC (Teams, Zoom,
+              browser, etc.) via Windows loopback. Use headphones to avoid echo.
             </span>
           </div>
           {settings.recordingMode === 'mic_and_system' && systemAudioSupported && (

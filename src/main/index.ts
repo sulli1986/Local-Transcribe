@@ -1,4 +1,14 @@
-import { app, BrowserWindow, ipcMain, dialog, shell, protocol, net, session } from 'electron'
+import {
+  app,
+  BrowserWindow,
+  desktopCapturer,
+  ipcMain,
+  dialog,
+  shell,
+  protocol,
+  net,
+  session
+} from 'electron'
 import path from 'path'
 import { pathToFileURL } from 'url'
 import { Vault } from './vault'
@@ -75,12 +85,6 @@ app.whenReady().then(() => {
     return permission === 'media' || (permission as string) === 'display-capture'
   })
 
-  if (process.platform === 'win32') {
-    session.defaultSession.setDisplayMediaRequestHandler((_request, callback) => {
-      callback({})
-    }, { useSystemPicker: true })
-  }
-
   stt.onStatus((status) => {
     mainWindow?.webContents.send('stt:status', status)
   })
@@ -97,6 +101,48 @@ app.on('window-all-closed', () => {
   stt.dispose()
   app.quit()
 })
+
+function pickScreenSource(sources: Electron.DesktopCapturerSource[]): Electron.DesktopCapturerSource | undefined {
+  return sources.find((s) => s.id.startsWith('screen:')) ?? sources[0]
+}
+
+function enableLoopbackHandler(): void {
+  if (process.platform !== 'win32') return
+
+  session.defaultSession.setDisplayMediaRequestHandler(async (_request, callback) => {
+    try {
+      const sources = await desktopCapturer.getSources({
+        types: ['screen'],
+        thumbnailSize: { width: 0, height: 0 },
+        fetchWindowIcons: false
+      })
+      const screen = pickScreenSource(sources)
+      if (!screen) {
+        console.error('[recording] No screen sources for system audio loopback')
+        callback({})
+        return
+      }
+      callback({ video: screen, audio: 'loopback' })
+    } catch (err) {
+      console.error('[recording] Loopback handler failed:', err)
+      callback({})
+    }
+  })
+}
+
+/** Fallback: native Windows picker — user picks Entire screen + Share system audio. */
+function enableLoopbackPicker(): void {
+  if (process.platform !== 'win32') return
+
+  session.defaultSession.setDisplayMediaRequestHandler((_request, callback) => {
+    callback({})
+  }, { useSystemPicker: true })
+}
+
+function disableLoopbackHandler(): void {
+  if (process.platform !== 'win32') return
+  session.defaultSession.setDisplayMediaRequestHandler(null)
+}
 
 function registerIpc(): void {
   // --- Settings ---
@@ -180,6 +226,15 @@ function registerIpc(): void {
   ipcMain.handle('recording:isSystemAudioSupported', () => ({
     supported: process.platform === 'win32'
   }))
+  ipcMain.handle('recording:enableLoopback', () => {
+    enableLoopbackHandler()
+  })
+  ipcMain.handle('recording:enableLoopbackPicker', () => {
+    enableLoopbackPicker()
+  })
+  ipcMain.handle('recording:disableLoopback', () => {
+    disableLoopbackHandler()
+  })
 
   // --- STT ---
   ipcMain.handle('stt:prepare', () => stt.prepare())
