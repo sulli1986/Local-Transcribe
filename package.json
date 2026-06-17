@@ -15,13 +15,14 @@
     "start:nix": "electron-vite build && nix-shell -p electron --run 'electron .'",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "package:linux": "electron-vite build && electron-builder --linux",
-    "package:win": "electron-vite build && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --win",
-    "package:win:dir": "electron-vite build && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --win --dir"
+    "package:win": "electron-vite build && cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --win",
+    "package:win:dir": "electron-vite build && cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --win --dir"
   },
   "devDependencies": {
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^5.2.0",
+    "cross-env": "^10.1.0",
     "electron": "^41.7.2",
     "electron-builder": "^26.15.3",
     "electron-vite": "^5.0.0",
