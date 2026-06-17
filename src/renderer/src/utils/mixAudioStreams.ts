@@ -6,6 +6,8 @@ export interface MixedAudioGraph {
   outputStream: MediaStream
   micGainNode: GainNode
   systemGainNode: GainNode
+  micAnalyser: AnalyserNode
+  systemAnalyser: AnalyserNode
   /** Connect VAD / analysis processor — receives summed mic + system. */
   connectProcessor: (processor: ScriptProcessorNode) => void
   cleanup: () => void
@@ -30,6 +32,14 @@ export function createMixedAudioGraph(
   micSource.connect(micGainNode)
   systemSource.connect(systemGainNode)
 
+  const micAnalyser = ctx.createAnalyser()
+  micAnalyser.fftSize = 2048
+  const systemAnalyser = ctx.createAnalyser()
+  systemAnalyser.fftSize = 2048
+
+  micGainNode.connect(micAnalyser)
+  systemGainNode.connect(systemAnalyser)
+
   const destination = ctx.createMediaStreamDestination()
   micGainNode.connect(destination)
   systemGainNode.connect(destination)
@@ -48,6 +58,8 @@ export function createMixedAudioGraph(
     systemSource.disconnect()
     micGainNode.disconnect()
     systemGainNode.disconnect()
+    micAnalyser.disconnect()
+    systemAnalyser.disconnect()
   }
 
   return {
@@ -55,6 +67,8 @@ export function createMixedAudioGraph(
     outputStream: destination.stream,
     micGainNode,
     systemGainNode,
+    micAnalyser,
+    systemAnalyser,
     connectProcessor,
     cleanup
   }

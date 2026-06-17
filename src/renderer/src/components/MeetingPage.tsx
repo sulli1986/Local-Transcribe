@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { AppSettings, Meeting, RecordingMode, SttStatus } from '../../../shared/types'
+import type { AppSettings, Meeting, SttStatus } from '../../../shared/types'
 import {
   formatTranscriptPlain,
   getTranscriptLines,
@@ -73,6 +73,7 @@ export default function MeetingPage({
   const [audioTimeSec, setAudioTimeSec] = useState<number | undefined>()
   const [jumpTimeSec, setJumpTimeSec] = useState<number | undefined>()
   const [systemAudioSupported, setSystemAudioSupported] = useState(false)
+  const [onlineMeeting, setOnlineMeeting] = useState(settings.recordingMode === 'mic_and_system')
 
   const queueRef = useRef(Promise.resolve())
   const pidRef = useRef(1)
@@ -121,12 +122,18 @@ export default function MeetingPage({
     window.api.isSystemAudioSupported().then(({ supported }) => setSystemAudioSupported(supported))
   }, [])
 
-  const effectiveRecordingMode: RecordingMode = useMemo(() => {
-    if (settings.recordingMode === 'mic_and_system' && systemAudioSupported) {
-      return 'mic_and_system'
-    }
-    return 'mic'
-  }, [settings.recordingMode, systemAudioSupported])
+  useEffect(() => {
+    setOnlineMeeting(settings.recordingMode === 'mic_and_system')
+  }, [settings.recordingMode])
+
+  const onlineMeetingActive = onlineMeeting && systemAudioSupported
+
+  const toggleOnlineMeeting = useCallback((enabled: boolean) => {
+    setOnlineMeeting(enabled)
+    window.api
+      .updateSettings({ recordingMode: enabled ? 'mic_and_system' : 'mic' })
+      .catch(() => {})
+  }, [])
 
   const saveDocument = useCallback(
     async (text: string) => {
@@ -227,7 +234,7 @@ export default function MeetingPage({
     },
     {
       preferredMicId: settings.preferredMicId,
-      recordingMode: effectiveRecordingMode,
+      recordingMode: onlineMeetingActive ? 'mic_and_system' : 'mic',
       micGain: settings.micGain ?? 1,
       systemAudioGain: settings.systemAudioGain ?? 1
     }
@@ -238,7 +245,7 @@ export default function MeetingPage({
       toast.show('Another meeting is already recording', true)
       return
     }
-    if (settings.recordingMode === 'mic_and_system' && !systemAudioSupported) {
+    if (onlineMeeting && !systemAudioSupported) {
       toast.show('System audio capture is not available on this platform — using microphone only')
     }
     try {
@@ -267,7 +274,7 @@ export default function MeetingPage({
         toast.show(`Could not start recording: ${message}`, true)
       }
     }
-  }, [id, recordingId, recorder, setRecordingId, toast, settings.recordingMode, systemAudioSupported])
+  }, [id, recordingId, recorder, setRecordingId, toast, onlineMeeting, systemAudioSupported])
 
   const generateNotes = useCallback(async () => {
     setGenerating(true)
@@ -860,21 +867,22 @@ export default function MeetingPage({
                 {recorder.devices.length === 0 && (
                   <span className="mic-hint">No mics listed — grant permission or click refresh</span>
                 )}
-                <span
-                  className={`recording-mode-pill${effectiveRecordingMode === 'mic_and_system' ? ' system' : ''}`}
+                <label
+                  className={`online-meeting-toggle${onlineMeetingActive ? ' active' : ''}`}
                   title={
                     systemAudioSupported
-                      ? undefined
+                      ? 'Capture call audio from Teams, Zoom, etc. (Windows loopback)'
                       : 'System audio capture coming later on this platform'
                   }
                 >
-                  {effectiveRecordingMode === 'mic_and_system' ? 'Mic + system' : 'Mic only'}
-                </span>
-                {effectiveRecordingMode === 'mic_and_system' && (
-                  <span className="recording-mode-hint">
-                    Captures all system audio (calls, apps, etc.)
-                  </span>
-                )}
+                  <input
+                    type="checkbox"
+                    checked={onlineMeeting}
+                    disabled={!systemAudioSupported || isRecording}
+                    onChange={(e) => toggleOnlineMeeting(e.target.checked)}
+                  />
+                  Online meeting
+                </label>
                 <span style={{ fontSize: 12 }}>
                   STT:{' '}
                   {settings.sttEngine === 'local'
@@ -902,9 +910,25 @@ export default function MeetingPage({
                   <span className={`dot ${recorder.paused ? '' : 'rec'}`} />{' '}
                   {recorder.paused ? 'Paused' : fmtClock(recorder.elapsedSec)}
                 </span>
+                {onlineMeetingActive && (
+                  <span className="online-meeting-badge">Online meeting</span>
+                )}
                 {!recorder.paused && (
-                  <div className="level-meter">
-                    <div style={{ width: `${Math.min(100, recorder.level * 100)}%` }} />
+                  <div className="level-meters">
+                    <div className="level-meter-group">
+                      <span className="level-meter-label">Mic</span>
+                      <div className="level-meter mic">
+                        <div style={{ width: `${Math.min(100, recorder.micLevel * 100)}%` }} />
+                      </div>
+                    </div>
+                    {onlineMeetingActive && (
+                      <div className="level-meter-group">
+                        <span className="level-meter-label">Call</span>
+                        <div className="level-meter call">
+                          <div style={{ width: `${Math.min(100, recorder.systemLevel * 100)}%` }} />
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
               </>

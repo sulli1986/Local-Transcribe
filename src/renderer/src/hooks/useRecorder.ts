@@ -24,7 +24,8 @@ export interface RecorderHandle {
   recording: boolean
   paused: boolean
   elapsedSec: number
-  level: number
+  micLevel: number
+  systemLevel: number
   devices: MediaDeviceInfo[]
   deviceId: string
   setDeviceId: (id: string) => void
@@ -42,6 +43,14 @@ const MAX_CHUNK_SEC = 20
 const MIN_CHUNK_SEC = 0.6
 const PREROLL_BLOCKS = 3 // ~0.75s of audio kept before speech onset
 
+function rmsFromAnalyser(analyser: AnalyserNode): number {
+  const buf = new Float32Array(analyser.fftSize)
+  analyser.getFloatTimeDomainData(buf)
+  let sum = 0
+  for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i]
+  return Math.sqrt(sum / buf.length) * 6
+}
+
 export function useRecorder(
   callbacks: RecorderCallbacks,
   options: RecorderOptions = {}
@@ -49,7 +58,8 @@ export function useRecorder(
   const [recording, setRecording] = useState(false)
   const [paused, setPaused] = useState(false)
   const [elapsedSec, setElapsedSec] = useState(0)
-  const [level, setLevel] = useState(0)
+  const [micLevel, setMicLevel] = useState(0)
+  const [systemLevel, setSystemLevel] = useState(0)
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([])
   const [deviceId, setDeviceId] = useState(options.preferredMicId ?? '')
 
@@ -62,13 +72,17 @@ export function useRecorder(
   const streamRef = useRef<MediaStream | null>(null)
   const displayStreamRef = useRef<MediaStream | null>(null)
   const mixedGraphRef = useRef<MixedAudioGraph | null>(null)
+  const micAnalyserRef = useRef<AnalyserNode | null>(null)
+  const systemAnalyserRef = useRef<AnalyserNode | null>(null)
   const recorderRef = useRef<MediaRecorder | null>(null)
   const processorRef = useRef<ScriptProcessorNode | null>(null)
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const meterTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const startTimeRef = useRef(0)
   const pausedRef = useRef(false)
   const totalPausedMsRef = useRef(0)
   const pauseStartedRef = useRef(0)
+  const useSystemRef = useRef(false)
 
   const refreshDevices = useCallback(async () => {
     try {
@@ -115,7 +129,36 @@ export function useRecorder(
     totalPausedMsRef.current -
     (pausedRef.current ? Date.now() - pauseStartedRef.current : 0)
 
+  const stopMeterPolling = useCallback(() => {
+    if (meterTimerRef.current) {
+      clearInterval(meterTimerRef.current)
+      meterTimerRef.current = null
+    }
+    micAnalyserRef.current = null
+    systemAnalyserRef.current = null
+  }, [])
+
+  const startMeterPolling = useCallback(() => {
+    stopMeterPolling()
+    meterTimerRef.current = setInterval(() => {
+      if (pausedRef.current) return
+      const micA = micAnalyserRef.current
+      if (micA) {
+        const v = rmsFromAnalyser(micA)
+        setMicLevel((prev) => Math.max(v, prev * 0.82))
+      }
+      if (useSystemRef.current) {
+        const sysA = systemAnalyserRef.current
+        if (sysA) {
+          const v = rmsFromAnalyser(sysA)
+          setSystemLevel((prev) => Math.max(v, prev * 0.82))
+        }
+      }
+    }, 100)
+  }, [stopMeterPolling])
+
   const releaseCapture = useCallback(async () => {
+    stopMeterPolling()
     mixedGraphRef.current?.cleanup()
     mixedGraphRef.current = null
     displayStreamRef.current?.getTracks().forEach((t) => t.stop())
@@ -124,13 +167,14 @@ export function useRecorder(
     streamRef.current = null
     await ctxRef.current?.close().catch(() => {})
     ctxRef.current = null
-  }, [])
+  }, [stopMeterPolling])
 
   const start = useCallback(async () => {
     if (recording) return
 
     const { recordingMode = 'mic', micGain = 1, systemAudioGain = 1 } = optionsRef.current
     const useSystem = recordingMode === 'mic_and_system'
+    useSystemRef.current = useSystem
 
     let micStream: MediaStream | null = null
     let displayStream: MediaStream | null = null
@@ -156,12 +200,18 @@ export function useRecorder(
         ctx = mixedGraph.ctx
         ctxRef.current = ctx
         recordingStream = mixedGraph.outputStream
+        micAnalyserRef.current = mixedGraph.micAnalyser
+        systemAnalyserRef.current = mixedGraph.systemAnalyser
       } else {
         micStream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints })
         streamRef.current = micStream
         recordingStream = micStream
         ctx = new AudioContext({ sampleRate: SAMPLE_RATE })
         ctxRef.current = ctx
+        const micAnalyser = ctx.createAnalyser()
+        micAnalyser.fftSize = 2048
+        micAnalyserRef.current = micAnalyser
+        systemAnalyserRef.current = null
       }
 
       refreshDevices()
@@ -214,7 +264,6 @@ export function useRecorder(
         let sum = 0
         for (let i = 0; i < block.length; i++) sum += block[i] * block[i]
         const rms = Math.sqrt(sum / block.length)
-        setLevel((prev) => Math.max(rms * 6, prev * 0.82))
 
         const nowSec = elapsedMs() / 1000
 
@@ -242,6 +291,7 @@ export function useRecorder(
         mixedGraph.connectProcessor(processor)
       } else {
         const source = ctx.createMediaStreamSource(recordingStream)
+        source.connect(micAnalyserRef.current!)
         source.connect(processor)
         const sink = ctx.createGain()
         sink.gain.value = 0
@@ -254,7 +304,10 @@ export function useRecorder(
       pausedRef.current = false
       setPaused(false)
       setElapsedSec(0)
+      setMicLevel(0)
+      setSystemLevel(0)
       setRecording(true)
+      startMeterPolling()
       timerRef.current = setInterval(() => {
         setElapsedSec(Math.floor(elapsedMs() / 1000))
       }, 500)
@@ -266,14 +319,15 @@ export function useRecorder(
       await releaseCapture()
       throw err
     }
-  }, [recording, deviceId, refreshDevices, releaseCapture])
+  }, [recording, deviceId, refreshDevices, releaseCapture, startMeterPolling])
 
   const pause = useCallback(() => {
     if (!recording || pausedRef.current) return
     pausedRef.current = true
     pauseStartedRef.current = Date.now()
     setPaused(true)
-    setLevel(0)
+    setMicLevel(0)
+    setSystemLevel(0)
     const recorder = recorderRef.current
     if (recorder?.state === 'recording') recorder.pause()
   }, [recording])
@@ -314,7 +368,8 @@ export function useRecorder(
     totalPausedMsRef.current = 0
     setRecording(false)
     setPaused(false)
-    setLevel(0)
+    setMicLevel(0)
+    setSystemLevel(0)
     return duration
   }, [releaseCapture])
 
@@ -322,7 +377,8 @@ export function useRecorder(
     recording,
     paused,
     elapsedSec,
-    level,
+    micLevel,
+    systemLevel,
     devices,
     deviceId,
     setDeviceId,

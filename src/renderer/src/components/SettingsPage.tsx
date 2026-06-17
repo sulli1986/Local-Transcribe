@@ -5,7 +5,6 @@ import type {
   ActionColumn,
   DotColorsSettings,
   LlmProvider,
-  RecordingMode,
   SttEngine,
   TagCategory,
   ThemePref,
@@ -290,36 +289,10 @@ export default function SettingsPage({ settings, onChange }: Props) {
 
         <div className="settings-section">
           <h3>Recording</h3>
-          <div className="field">
-            <label>Recording source</label>
-            <div className="seg-control">
-              {(
-                [
-                  ['mic', 'Mic only'],
-                  ['mic_and_system', 'Mic + system audio (Windows)']
-                ] as [RecordingMode, string][]
-              ).map(([v, label]) => (
-                <button
-                  key={v}
-                  type="button"
-                  className={settings.recordingMode === v ? 'active' : ''}
-                  disabled={v === 'mic_and_system' && !systemAudioSupported}
-                  title={
-                    v === 'mic_and_system' && !systemAudioSupported
-                      ? 'System audio capture coming later on this platform'
-                      : undefined
-                  }
-                  onClick={() => update({ recordingMode: v })}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-            <span className="hint">
-              Mic + system audio automatically captures everything playing on your PC (Teams, Zoom,
-              browser, etc.) via Windows loopback. Use headphones to avoid echo.
-            </span>
-          </div>
+          <p className="hint" style={{ marginTop: 0 }}>
+            Use the <strong>Online meeting</strong> toggle on the meeting record bar to capture
+            call audio. Adjust levels below when that mode is on.
+          </p>
           {settings.recordingMode === 'mic_and_system' && systemAudioSupported && (
             <>
               <div className="field">

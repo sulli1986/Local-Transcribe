@@ -973,6 +973,7 @@ html[data-theme='dark'] .search-hit {
   border-radius: 3px;
   background: var(--bg-hover);
   overflow: hidden;
+  flex-shrink: 0;
 }
 
 .level-meter > div {
@@ -1019,6 +1020,94 @@ html[data-theme='dark'] .search-hit {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.online-meeting-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  flex-shrink: 0;
+  cursor: pointer;
+  user-select: none;
+  padding: 4px 10px;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background: var(--bg-input);
+}
+
+.online-meeting-toggle.active {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.online-meeting-toggle input {
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.online-meeting-toggle:has(input:disabled) {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.online-meeting-badge {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: 10px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.level-meters {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.level-meter-group {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.level-meter-label {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-faint);
+  width: 28px;
+  flex-shrink: 0;
+}
+
+.level-meter {
+  width: 70px;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--bg-hover);
+  overflow: hidden;
+}
+
+.level-meter > div {
+  height: 100%;
+  transition: width 0.1s linear;
+}
+
+.level-meter.mic > div {
+  background: #3fb950;
+}
+
+.level-meter.call > div {
+  background: #58a6ff;
 }
 
 .drop-overlay {
