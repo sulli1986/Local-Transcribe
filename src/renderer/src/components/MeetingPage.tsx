@@ -893,45 +893,55 @@ export default function MeetingPage({
                 </span>
               </>
             ) : (
-              <>
-                {recorder.paused ? (
-                  <button className="rec-btn start with-icon" onClick={recorder.resume}>
-                    <Icon name="play" size={14} /> Resume
+              <div className="rec-bar-recording">
+                <div className="rec-row">
+                  {recorder.paused ? (
+                    <button className="rec-btn start with-icon" onClick={recorder.resume}>
+                      <Icon name="play" size={14} /> Resume
+                    </button>
+                  ) : (
+                    <button className="secondary-btn with-icon" onClick={recorder.pause}>
+                      <Icon name="pause" size={14} /> Pause
+                    </button>
+                  )}
+                  <button className="rec-btn with-icon" onClick={stopRecording}>
+                    <Icon name="stop" size={14} /> Stop
                   </button>
-                ) : (
-                  <button className="secondary-btn with-icon" onClick={recorder.pause}>
-                    <Icon name="pause" size={14} /> Pause
-                  </button>
-                )}
-                <button className="rec-btn with-icon" onClick={stopRecording}>
-                  <Icon name="stop" size={14} /> Stop
-                </button>
-                <span className="rec-indicator">
-                  <span className={`dot ${recorder.paused ? '' : 'rec'}`} />{' '}
-                  {recorder.paused ? 'Paused' : fmtClock(recorder.elapsedSec)}
-                </span>
-                {onlineMeetingActive && (
-                  <span className="online-meeting-badge">Online meeting</span>
-                )}
-                {!recorder.paused && (
-                  <div className="level-meters">
+                  <span className="rec-indicator">
+                    <span className={`dot ${recorder.paused ? '' : 'rec'}`} />{' '}
+                    {recorder.paused ? 'Paused' : fmtClock(recorder.elapsedSec)}
+                  </span>
+                  {recorder.systemCaptureActive && (
+                    <span className="online-meeting-badge">Online meeting</span>
+                  )}
+                </div>
+                <div className="level-meters">
+                  <div className="level-meter-group">
+                    <span className="level-meter-label">Mic</span>
+                    <div className="level-meter mic">
+                      <div
+                        style={{
+                          width: `${Math.min(100, recorder.micLevel * 100)}%`,
+                          opacity: recorder.paused ? 0.35 : 1
+                        }}
+                      />
+                    </div>
+                  </div>
+                  {recorder.systemCaptureActive && (
                     <div className="level-meter-group">
-                      <span className="level-meter-label">Mic</span>
-                      <div className="level-meter mic">
-                        <div style={{ width: `${Math.min(100, recorder.micLevel * 100)}%` }} />
+                      <span className="level-meter-label">Call</span>
+                      <div className="level-meter call">
+                        <div
+                          style={{
+                            width: `${Math.min(100, recorder.systemLevel * 100)}%`,
+                            opacity: recorder.paused ? 0.35 : 1
+                          }}
+                        />
                       </div>
                     </div>
-                    {onlineMeetingActive && (
-                      <div className="level-meter-group">
-                        <span className="level-meter-label">Call</span>
-                        <div className="level-meter call">
-                          <div style={{ width: `${Math.min(100, recorder.systemLevel * 100)}%` }} />
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                )}
-              </>
+                  )}
+                </div>
+              </div>
             )}
             {sttPill}
           </div>

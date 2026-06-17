@@ -968,9 +968,9 @@ html[data-theme='dark'] .search-hit {
 }
 
 .level-meter {
-  width: 70px;
-  height: 6px;
-  border-radius: 3px;
+  width: 120px;
+  height: 8px;
+  border-radius: 4px;
   background: var(--bg-hover);
   overflow: hidden;
   flex-shrink: 0;
@@ -1066,11 +1066,26 @@ html[data-theme='dark'] .search-hit {
   flex-shrink: 0;
 }
 
+.rec-bar-recording {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+
+.rec-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
 .level-meters {
   display: flex;
   align-items: center;
-  gap: 10px;
-  flex-shrink: 0;
+  gap: 16px;
+  width: 100%;
+  min-height: 14px;
 }
 
 .level-meter-group {
@@ -1090,16 +1105,17 @@ html[data-theme='dark'] .search-hit {
 }
 
 .level-meter {
-  width: 70px;
-  height: 6px;
-  border-radius: 3px;
+  width: 120px;
+  height: 8px;
+  border-radius: 4px;
   background: var(--bg-hover);
   overflow: hidden;
+  flex-shrink: 0;
 }
 
 .level-meter > div {
   height: 100%;
-  transition: width 0.1s linear;
+  transition: width 0.08s linear;
 }
 
 .level-meter.mic > div {

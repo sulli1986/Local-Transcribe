@@ -15,7 +15,8 @@
     "start:nix": "electron-vite build && nix-shell -p electron --run 'electron .'",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "package:linux": "electron-vite build && electron-builder --linux",
-    "package:win": "electron-vite build && electron-builder --win"
+    "package:win": "electron-vite build && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --win",
+    "package:win:dir": "electron-vite build && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --win --dir"
   },
   "devDependencies": {
     "@types/react": "^19.2.17",

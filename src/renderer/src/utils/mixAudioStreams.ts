@@ -1,5 +1,13 @@
 const SAMPLE_RATE = 16000
 
+/** AnalyserNode must reach the destination or it may not receive samples. */
+export function connectAnalyserForMeter(ctx: AudioContext, analyser: AnalyserNode): void {
+  const silent = ctx.createGain()
+  silent.gain.value = 0
+  analyser.connect(silent)
+  silent.connect(ctx.destination)
+}
+
 export interface MixedAudioGraph {
   ctx: AudioContext
   /** Mixed mono stream for MediaRecorder. */
@@ -39,6 +47,8 @@ export function createMixedAudioGraph(
 
   micGainNode.connect(micAnalyser)
   systemGainNode.connect(systemAnalyser)
+  connectAnalyserForMeter(ctx, micAnalyser)
+  connectAnalyserForMeter(ctx, systemAnalyser)
 
   const destination = ctx.createMediaStreamDestination()
   micGainNode.connect(destination)

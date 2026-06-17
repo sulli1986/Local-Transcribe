@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { RecordingMode } from '../../../shared/types'
 import {
   captureSystemAudio,
+  connectAnalyserForMeter,
   createMixedAudioGraph,
   type MixedAudioGraph
 } from '../utils/mixAudioStreams'
@@ -26,6 +27,8 @@ export interface RecorderHandle {
   elapsedSec: number
   micLevel: number
   systemLevel: number
+  /** True when this session is recording mic + system loopback. */
+  systemCaptureActive: boolean
   devices: MediaDeviceInfo[]
   deviceId: string
   setDeviceId: (id: string) => void
@@ -48,7 +51,13 @@ function rmsFromAnalyser(analyser: AnalyserNode): number {
   analyser.getFloatTimeDomainData(buf)
   let sum = 0
   for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i]
-  return Math.sqrt(sum / buf.length) * 6
+  return Math.sqrt(sum / buf.length) * 12
+}
+
+function rmsFromBlock(block: Float32Array): number {
+  let sum = 0
+  for (let i = 0; i < block.length; i++) sum += block[i] * block[i]
+  return Math.sqrt(sum / block.length) * 12
 }
 
 export function useRecorder(
@@ -60,6 +69,7 @@ export function useRecorder(
   const [elapsedSec, setElapsedSec] = useState(0)
   const [micLevel, setMicLevel] = useState(0)
   const [systemLevel, setSystemLevel] = useState(0)
+  const [systemCaptureActive, setSystemCaptureActive] = useState(false)
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([])
   const [deviceId, setDeviceId] = useState(options.preferredMicId ?? '')
 
@@ -145,13 +155,13 @@ export function useRecorder(
       const micA = micAnalyserRef.current
       if (micA) {
         const v = rmsFromAnalyser(micA)
-        setMicLevel((prev) => Math.max(v, prev * 0.82))
+        setMicLevel((prev) => Math.max(v, prev * 0.85))
       }
       if (useSystemRef.current) {
         const sysA = systemAnalyserRef.current
         if (sysA) {
           const v = rmsFromAnalyser(sysA)
-          setSystemLevel((prev) => Math.max(v, prev * 0.82))
+          setSystemLevel((prev) => Math.max(v, prev * 0.85))
         }
       }
     }, 100)
@@ -214,6 +224,8 @@ export function useRecorder(
         systemAnalyserRef.current = null
       }
 
+      await ctx.resume()
+
       refreshDevices()
 
       const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
@@ -265,6 +277,10 @@ export function useRecorder(
         for (let i = 0; i < block.length; i++) sum += block[i] * block[i]
         const rms = Math.sqrt(sum / block.length)
 
+        if (!useSystemRef.current) {
+          setMicLevel((prev) => Math.max(rmsFromBlock(block), prev * 0.85))
+        }
+
         const nowSec = elapsedMs() / 1000
 
         if (rms > SPEECH_THRESHOLD) {
@@ -292,6 +308,7 @@ export function useRecorder(
       } else {
         const source = ctx.createMediaStreamSource(recordingStream)
         source.connect(micAnalyserRef.current!)
+        connectAnalyserForMeter(ctx, micAnalyserRef.current!)
         source.connect(processor)
         const sink = ctx.createGain()
         sink.gain.value = 0
@@ -306,6 +323,7 @@ export function useRecorder(
       setElapsedSec(0)
       setMicLevel(0)
       setSystemLevel(0)
+      setSystemCaptureActive(useSystem)
       setRecording(true)
       startMeterPolling()
       timerRef.current = setInterval(() => {
@@ -370,6 +388,7 @@ export function useRecorder(
     setPaused(false)
     setMicLevel(0)
     setSystemLevel(0)
+    setSystemCaptureActive(false)
     return duration
   }, [releaseCapture])
 
@@ -379,6 +398,7 @@ export function useRecorder(
     elapsedSec,
     micLevel,
     systemLevel,
+    systemCaptureActive,
     devices,
     deviceId,
     setDeviceId,

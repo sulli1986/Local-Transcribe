@@ -25,6 +25,7 @@ linux:
 win:
   target:
     - nsis
+  signAndEditExecutable: false
   files:
     - "!node_modules/onnxruntime-node/bin/napi-v6/linux/**"
 nsis:
